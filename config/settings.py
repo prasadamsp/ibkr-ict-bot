@@ -134,7 +134,73 @@ SYMBOLS: Dict[str, SymbolConfig] = {
         min_qty=1.0,
         qty_step=1.0,
     ),
+    # GBPUSD — Forex via IDEALPRO, same spec structure as EURUSD
+    "GBPUSD": SymbolConfig(
+        symbol="GBP",
+        sec_type="CASH",
+        exchange="IDEALPRO",
+        currency="USD",
+        what_to_show="MIDPOINT",
+        lot_size=1.0,
+        tick_size=0.00001,
+        contract_size=100_000.0,
+        pip_value=10.0,
+        max_position_size=10.0,
+        min_qty=20_000.0,
+        qty_step=1.0,
+    ),
+    # BTC — Crypto via PAXOS. 1 lot = 1 BTC, $1 move = $1 P&L.
+    "BTC": SymbolConfig(
+        symbol="BTC",
+        sec_type="CRYPTO",
+        exchange="PAXOS",
+        currency="USD",
+        what_to_show="TRADES",
+        lot_size=1.0,
+        tick_size=0.01,
+        contract_size=1.0,    # 1 BTC per lot
+        pip_value=1.0,         # $1 per $1 move
+        max_position_size=0.5, # max 0.5 BTC
+        min_qty=0.0001,
+        qty_step=0.0001,
+    ),
+    # OIL (US Crude) — CFD on WTI, 100 barrels per lot
+    "OIL": SymbolConfig(
+        symbol="USOIL",
+        sec_type="CFD",
+        exchange="SMART",
+        currency="USD",
+        what_to_show="MIDPOINT",
+        lot_size=1.0,
+        tick_size=0.01,
+        contract_size=100.0,  # 100 barrels per lot
+        pip_value=100.0,       # $100 per $1 move per lot
+        max_position_size=5.0,
+        min_qty=1.0,
+        qty_step=1.0,
+    ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Regime & Seasonality Configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RegimeConfig:
+    adx_trending_threshold: float = 25.0
+    adx_ranging_threshold: float = 20.0
+    atr_high_vol_pct: float = 0.015
+    atr_low_vol_pct: float = 0.005
+    ema_fast: int = 50
+    ema_slow: int = 200
+
+
+@dataclass
+class SeasonalityConfig:
+    enabled: bool = True
+    min_multiplier: float = 0.5
+    max_multiplier: float = 1.5
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +319,12 @@ class Config:
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     logging: LogConfig = field(default_factory=LogConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
+    regime: RegimeConfig = field(default_factory=RegimeConfig)
+    seasonality: SeasonalityConfig = field(default_factory=SeasonalityConfig)
     symbols: Dict[str, SymbolConfig] = field(default_factory=lambda: SYMBOLS)
-    active_symbols: List[str] = field(default_factory=lambda: ["XAGUSD", "XAUUSD", "NAS100"])
+    active_symbols: List[str] = field(
+        default_factory=lambda: ["XAUUSD", "NAS100", "EURUSD", "GBPUSD", "BTC", "XAGUSD", "OIL"]
+    )
     paper_trading: bool = True   # NEVER set False without review
 
 
