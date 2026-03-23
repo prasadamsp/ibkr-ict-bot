@@ -1,0 +1,42 @@
+[Unit]
+Description=IB Gateway (managed by IBC)
+Documentation=https://github.com/IbcAlpha/IBC
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+
+# IBC launch script — starts IB Gateway and handles auto-login
+ExecStart=/bin/bash /opt/ibc/scripts/ibcstart.sh \
+    /opt/ibgateway \
+    /opt/ibc \
+    /opt/ibc/config.ini \
+    Gateway \
+    4002 \
+    paper
+
+# Give IBC 60s to cleanly exit (it needs to shut down IB Gateway too)
+TimeoutStopSec=60
+KillSignal=SIGTERM
+
+# Auto-restart: IB Gateway disconnects ~daily for IBKR maintenance (usually 23:00 ET)
+# IBC will handle reconnection, but restart the service if it crashes unexpectedly
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+# Virtual display — IB Gateway login dialog needs a display even with IBC
+Environment=DISPLAY=:1
+ExecStartPre=/usr/bin/Xvfb :1 -screen 0 1024x768x24 -nolisten tcp &
+ExecStartPre=/bin/sleep 2
+
+# Logging
+StandardOutput=append:/opt/trading/IBKR/logs/gateway.log
+StandardError=append:/opt/trading/IBKR/logs/gateway.log
+
+[Install]
+WantedBy=multi-user.target

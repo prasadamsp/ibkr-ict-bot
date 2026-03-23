@@ -1,0 +1,24 @@
+# Credentials — never commit
+.env
+system/ibc.ini
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+*.egg-info/
+
+# Test cache
+.pytest_cache/
+
+# Logs and data (large, machine-specific)
+logs/
+data/cache/
+
+# OS
+.DS_Store
+Thumbs.db

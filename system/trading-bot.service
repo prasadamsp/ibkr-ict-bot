@@ -1,0 +1,46 @@
+[Unit]
+Description=ICT Trading Bot (IBKR paper/live)
+Documentation=https://github.com/your-repo/IBKR
+After=network-online.target ibkr-gateway.service
+# Wait for IB Gateway to be up before starting the bot
+Wants=ibkr-gateway.service
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+WorkingDirectory=/opt/trading/IBKR
+
+# Use the venv Python
+ExecStart=/opt/trading/IBKR/.venv/bin/python main.py \
+    --mode paper \
+    --port 4002
+
+# Wait 45s before starting — IB Gateway needs time to initialize
+ExecStartPre=/bin/sleep 45
+
+# Restart on failure (e.g. network blip, IBKR reconnection error)
+# Do NOT restart indefinitely — if the bot crashes 5 times in 10 minutes, stop.
+Restart=on-failure
+RestartSec=60
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/trading/IBKR/.env
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+# Logging
+StandardOutput=append:/opt/trading/IBKR/logs/system.log
+StandardError=append:/opt/trading/IBKR/logs/system.log
+
+# Graceful shutdown: give 30s for close_all_trades() to complete
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
