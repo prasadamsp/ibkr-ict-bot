@@ -99,43 +99,60 @@ Signal score = weighted sum of active confluences (threshold: 0.55)
 
 ## Backtest Results
 
-Walk-forward validation on **$50,000 starting equity**, split into 3 periods per symbol:
-- **Train** — strategy learns on this window
-- **Validation** — out-of-sample tuning check
-- **Test** — untouched, final verdict (gate: Sharpe ≥ 0.8)
+Walk-forward validation on **$50,000 starting equity**, split into 3 non-overlapping windows:
+- **Train (60%)** — strategy run on historical data
+- **Validation (20%)** — out-of-sample gate check (must pass Sharpe ≥ 0.8 to reveal test)
+- **Test (20%)** — untouched final verdict, only revealed if validation passes
 
-### Summary
+Data ranges extended to **2 years** (Mar 2024 → Mar 2026) after downloading full history from Binance (BTC), Yahoo Finance (OIL), and IBKR cache (all others).
 
-| Symbol | Period | Trades | Win Rate | P&L | Return | Sharpe | Max DD | Gate |
-|--------|--------|--------|----------|-----|--------|--------|--------|------|
-| **XAGUSD** | Train (Oct 24–Aug 25) | 44 | 22.7% | +$18,748 | **+37.5%** | 24.3 | 2.0% | — |
-| **XAGUSD** | Validation (Aug–Dec 25) | 15 | 26.7% | +$2,489 | +5.0% | 45.7 | 1.3% | — |
-| **XAGUSD** | **Test (Dec 25–Mar 26)** | **13** | **38.5%** | **+$6,627** | **+13.3%** | **66.1** | **2.8%** | ✅ PASS |
-| **NAS100** | Train (Oct 24–Aug 25) | 16 | 37.5% | +$4,742 | +9.5% | 64.2 | 1.7% | — |
-| **NAS100** | Validation (Aug–Dec 25) | 8 | 25.0% | +$2,105 | +4.2% | 47.0 | 1.3% | — |
-| **NAS100** | **Test (Dec 25–Mar 26)** | **4** | **50.0%** | **+$2,361** | **+4.7%** | **109.1** | **1.0%** | ✅ PASS |
-| XAUUSD | Train | 51 | 7.8% | -$4,652 | -9.3% | -20.6 | 13.8% | — |
-| XAUUSD | Validation | 17 | 0.0% | -$4,079 | -8.2% | — | 8.2% | ❌ FAIL |
-| EURUSD | Train | 37 | 21.6% | +$128 | +0.3% | 1.8 | 8.0% | — |
-| EURUSD | Validation | 11 | 0.0% | -$2,682 | -5.4% | — | 5.4% | ❌ FAIL |
-| GBPUSD | Train | 24 | 8.3% | -$2,708 | -5.4% | -35.7 | 7.2% | — |
-| GBPUSD | Validation | 17 | 17.7% | -$75 | -0.1% | -0.3 | 5.4% | ❌ FAIL |
-| BTC | Train | 9 | 11.1% | -$222 | -0.4% | -102.3 | 0.5% | — |
-| BTC | Validation | 3 | 0.0% | -$96 | -0.2% | — | 0.2% | ❌ FAIL |
-| OIL | Train | 3 | 0.0% | -$69 | -0.1% | -242.1 | 0.1% | — |
-| OIL | Validation | 1 | 0.0% | -$38 | -0.1% | — | 0.1% | ❌ FAIL |
+### Extended Results (Mar 2024 → Mar 2026)
+
+| Symbol | Window | Period | Trades | Win Rate | Return | Sharpe | Max DD | Gate |
+|--------|--------|--------|--------|----------|--------|--------|--------|------|
+| **XAGUSD** | Train | Oct 24–Aug 25 | 89 | 28.1% | **+7.9%** | 25.0 | 3.6% | — |
+| **XAGUSD** | Validation | Aug–Dec 25 | 27 | 18.5% | +2.0% | 13.8 | 2.9% | — |
+| **XAGUSD** | **Test** | **Dec 25–Mar 26** | **26** | **42.3%** | **+19.1%** | **76.9** | **2.5%** | ✅ **PASS** |
+| **NAS100** | Train | Oct 24–Aug 25 | 17 | 41.2% | +10.2% | 76.1 | 1.1% | — |
+| **NAS100** | Validation | Aug–Dec 25 | 8 | 37.5% | +2.7% | 44.8 | 1.0% | — |
+| **NAS100** | **Test** | **Dec 25–Mar 26** | **8** | **50.0%** | **+7.2%** | **101.0** | **0.7%** | ✅ **PASS** |
+| **GBPUSD** | Train | Oct 24–Aug 25 | 52 | 19.2% | +2.5% | 7.3 | 6.8% | — |
+| **GBPUSD** | Validation | Aug–Dec 25 | 26 | 23.1% | +4.6% | 22.6 | 4.4% | — |
+| **GBPUSD** | **Test** | **Dec 25–Mar 26** | **14** | **14.3%** | **-2.5%** | **-32.3** | **4.4%** | ⚠️ PASS gate, negative test |
+| XAUUSD | Train | Oct 24–Aug 25 | 67 | 19.4% | +5.2% | 10.8 | 9.6% | — |
+| XAUUSD | Validation | Aug–Dec 25 | 24 | 8.3% | -5.9% | -47.0 | 9.6% | ❌ FAIL |
+| EURUSD | Train | Oct 24–Aug 25 | 58 | 13.8% | -6.8% | -18.6 | 11.9% | — |
+| EURUSD | Validation | Aug–Dec 25 | 21 | 19.1% | -3.2% | -30.5 | 3.7% | ❌ FAIL |
+| OIL | Train | Jan–Feb 26 | 9 | 0.0% | -0.5% | -310 | 0.5% | — |
+| OIL | Validation | Feb–Mar 26 | 4 | 0.0% | -0.5% | -469 | 0.5% | ❌ FAIL |
+| BTC | — | *running* | — | — | — | — | — | 🔄 pending |
 
 ### Key Findings
 
-**XAGUSD** is the standout — consistent positive P&L across all 3 windows, Sharpe ratio improving from 24→45→66 (getting *more* consistent over time), 38.5% win rate on test with 2.8% max drawdown on a min 2:1 RR strategy.
+**XAGUSD** is the standout performer — 42.3% win rate on unseen test data, +19.1% return, Sharpe 76.9, with only 2.5% max drawdown on a minimum 2:1 RR strategy. Consistent positive P&L across all three windows across the full 17-month period.
 
-**NAS100** passed with flying colours on test (50% win rate, Sharpe 109, <1% drawdown) though test sample is small (4 trades).
+**NAS100** delivers clean results — 50% win rate and Sharpe 101 on test, <1% drawdown. Solid across all windows. (Note: uses H1 bars as M15 proxy — M15 NAS100 feed coming.)
 
-**XAUUSD, EURUSD, GBPUSD, BTC, OIL** failed the gate — primarily due to low win rates in the validation window. These strategies are deployed live but with stricter confluence requirements pending further tuning.
+**GBPUSD** is mixed — passes the validation gate (Sharpe 22.6) but then goes negative on the test window (-2.5%, Sharpe -32.3). This suggests the strategy over-fit to the Aug–Dec 25 period. Treat as unconfirmed.
 
-> **Methodology:** Walk-forward split is ~60% train / 20% validation / 20% test.
-> Starting equity $50,000. Gate criterion: out-of-sample Sharpe ≥ 0.8.
-> ICT strategy is inherently low trade-frequency — small test sample sizes are expected.
+**XAUUSD** improved significantly with more data (training went from -9.3% → +5.2%) but validation still fails. The ICT setup frequency for gold may be too low for reliable statistics in the 4-month val window.
+
+**EURUSD & OIL** consistently negative — the current ICT parameter set doesn't suit these instruments. OIL backtest window is still only 2 months (limited Twelve Data cache); extending to 1 year is pending.
+
+> **Methodology:** Walk-forward split 60/20/20 by time. Starting equity $50,000.
+> Gate: validation Sharpe ≥ 0.8. ICT strategy is low-frequency by design — small
+> trade counts per window are expected. Test result only shown when validation passes.
+
+### Before vs After (Extended Data)
+
+| Symbol | Old Test Return | New Test Return | Old Gate | New Gate |
+|--------|----------------|----------------|----------|----------|
+| XAGUSD | +13.3% | **+19.1%** | ✅ PASS | ✅ PASS |
+| NAS100 | +4.7% | **+7.2%** | ✅ PASS | ✅ PASS |
+| GBPUSD | failed val | +4.6% val | ❌ FAIL | ⚠️ gate pass, test fail |
+| XAUUSD | -8.2% val | +5.2% train | ❌ FAIL | ❌ FAIL |
+| EURUSD | -5.4% val | -3.2% val | ❌ FAIL | ❌ FAIL |
+| BTC | -0.2% (2 months) | 🔄 1 year running | ❌ FAIL | pending |
 
 ---
 
