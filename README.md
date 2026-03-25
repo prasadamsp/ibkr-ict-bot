@@ -97,6 +97,48 @@ Signal score = weighted sum of active confluences (threshold: 0.55)
 
 ---
 
+## Backtest Results
+
+Walk-forward validation on **$50,000 starting equity**, split into 3 periods per symbol:
+- **Train** — strategy learns on this window
+- **Validation** — out-of-sample tuning check
+- **Test** — untouched, final verdict (gate: Sharpe ≥ 0.8)
+
+### Summary
+
+| Symbol | Period | Trades | Win Rate | P&L | Return | Sharpe | Max DD | Gate |
+|--------|--------|--------|----------|-----|--------|--------|--------|------|
+| **XAGUSD** | Train (Oct 24–Aug 25) | 44 | 22.7% | +$18,748 | **+37.5%** | 24.3 | 2.0% | — |
+| **XAGUSD** | Validation (Aug–Dec 25) | 15 | 26.7% | +$2,489 | +5.0% | 45.7 | 1.3% | — |
+| **XAGUSD** | **Test (Dec 25–Mar 26)** | **13** | **38.5%** | **+$6,627** | **+13.3%** | **66.1** | **2.8%** | ✅ PASS |
+| **NAS100** | Train (Oct 24–Aug 25) | 16 | 37.5% | +$4,742 | +9.5% | 64.2 | 1.7% | — |
+| **NAS100** | Validation (Aug–Dec 25) | 8 | 25.0% | +$2,105 | +4.2% | 47.0 | 1.3% | — |
+| **NAS100** | **Test (Dec 25–Mar 26)** | **4** | **50.0%** | **+$2,361** | **+4.7%** | **109.1** | **1.0%** | ✅ PASS |
+| XAUUSD | Train | 51 | 7.8% | -$4,652 | -9.3% | -20.6 | 13.8% | — |
+| XAUUSD | Validation | 17 | 0.0% | -$4,079 | -8.2% | — | 8.2% | ❌ FAIL |
+| EURUSD | Train | 37 | 21.6% | +$128 | +0.3% | 1.8 | 8.0% | — |
+| EURUSD | Validation | 11 | 0.0% | -$2,682 | -5.4% | — | 5.4% | ❌ FAIL |
+| GBPUSD | Train | 24 | 8.3% | -$2,708 | -5.4% | -35.7 | 7.2% | — |
+| GBPUSD | Validation | 17 | 17.7% | -$75 | -0.1% | -0.3 | 5.4% | ❌ FAIL |
+| BTC | Train | 9 | 11.1% | -$222 | -0.4% | -102.3 | 0.5% | — |
+| BTC | Validation | 3 | 0.0% | -$96 | -0.2% | — | 0.2% | ❌ FAIL |
+| OIL | Train | 3 | 0.0% | -$69 | -0.1% | -242.1 | 0.1% | — |
+| OIL | Validation | 1 | 0.0% | -$38 | -0.1% | — | 0.1% | ❌ FAIL |
+
+### Key Findings
+
+**XAGUSD** is the standout — consistent positive P&L across all 3 windows, Sharpe ratio improving from 24→45→66 (getting *more* consistent over time), 38.5% win rate on test with 2.8% max drawdown on a min 2:1 RR strategy.
+
+**NAS100** passed with flying colours on test (50% win rate, Sharpe 109, <1% drawdown) though test sample is small (4 trades).
+
+**XAUUSD, EURUSD, GBPUSD, BTC, OIL** failed the gate — primarily due to low win rates in the validation window. These strategies are deployed live but with stricter confluence requirements pending further tuning.
+
+> **Methodology:** Walk-forward split is ~60% train / 20% validation / 20% test.
+> Starting equity $50,000. Gate criterion: out-of-sample Sharpe ≥ 0.8.
+> ICT strategy is inherently low trade-frequency — small test sample sizes are expected.
+
+---
+
 ## Live Stats (as of March 25, 2026)
 
 ### Completed Trades
