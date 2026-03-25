@@ -53,6 +53,9 @@ async def download(
         for tf in timeframes:
             done += 1
             print(f"\n[{done}/{total}] Downloading {sym} {tf} ({days} days) ...")
+            # IBKR pacing: wait between requests to avoid Error 162 rate limits
+            if done > 1:
+                await asyncio.sleep(3)
 
             try:
                 await data_handler.load_history(sym, [tf], days=days)

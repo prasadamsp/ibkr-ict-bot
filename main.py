@@ -26,7 +26,7 @@ from config.settings import CONFIG
 from data.data_handler import DataHandler
 from execution.execution import ExecutionEngine
 from risk.risk_manager import RiskManager
-from strategy.strategy import ICTStrategy
+from strategy.router import StrategyRouter
 from utils.logger import TradeLogger, system_log
 
 
@@ -88,12 +88,11 @@ async def run_live(symbols: list[str], paper: bool = True) -> None:
         )
 
     # ── Per-symbol setup ─────────────────────────────────────────────────────
-    strategies: dict[str, ICTStrategy] = {sym: ICTStrategy() for sym in symbols}
+    router = StrategyRouter(CONFIG.strategy, CONFIG.risk)
 
     for sym in symbols:
-        strategy = strategies[sym]
 
-        def make_m15_callback(symbol: str, strat: ICTStrategy):
+        def make_m15_callback(symbol: str):
             def on_m15_bar(s: str, tf: str, df):
                 if tf != "M15":
                     return
@@ -117,11 +116,27 @@ async def run_live(symbols: list[str], paper: bool = True) -> None:
 
                 h1_df = data_handler.get_closed_bars(symbol, "H1")
                 m15_df = data_handler.get_closed_bars(symbol, tf)
+                d1_df = data_handler.get_closed_bars(symbol, "D1")
 
                 if m15_df is None or h1_df is None or len(m15_df) < 50:
                     return
 
-                signal = strat.on_bar(symbol, tf, m15_df, h1_df)
+                current_dt = m15_df.index[-1].to_pydatetime()
+                open_positions = list(execution.active_trades.values())
+
+                # Build extra_data for GSR (XAGUSD needs gold price)
+                extra_data = {}
+                if symbol == "XAGUSD":
+                    xau_bars = data_handler.get_closed_bars("XAUUSD", "M15")
+                    xag_bars = data_handler.get_closed_bars("XAGUSD", "M15")
+                    if xau_bars is not None and xag_bars is not None:
+                        extra_data["xau_price"] = float(xau_bars["close"].iloc[-1])
+                        extra_data["xag_price"] = float(xag_bars["close"].iloc[-1])
+
+                signal = router.route(
+                    symbol, m15_df, h1_df, current_dt, open_positions,
+                    extra_data, d1_df=d1_df,
+                )
                 if signal:
                     system_log.info(
                         f"▶ Signal [{symbol}] {signal.direction.upper()}  "
@@ -136,8 +151,8 @@ async def run_live(symbols: list[str], paper: bool = True) -> None:
         # start_live_feed pre-loads history AND subscribes live in one call
         await data_handler.start_live_feed(
             sym,
-            ["M15", "H1"],
-            make_m15_callback(sym, strategy),
+            ["M15", "H1", "D1"],
+            make_m15_callback(sym),
         )
         system_log.info(f"[{sym}] Ready.")
 

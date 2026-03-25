@@ -110,6 +110,20 @@ class ExecutionEngine:
         if sym_cfg and sym_cfg.qty_step > 0:
             quantity = round(quantity / sym_cfg.qty_step) * sym_cfg.qty_step
 
+        # Check if this symbol uses IBKR for execution.
+        # CRYPTO/PAXOS orders are rejected in paper accounts (Error 321 Read-Only).
+        # For these, log the signal as a paper trade and return without placing.
+        sym_cfg_exec = CONFIG.symbols.get(signal.symbol)
+        if sym_cfg_exec and sym_cfg_exec.sec_type == "CRYPTO":
+            execution_log.info(
+                f"[{signal.symbol}] CRYPTO paper-trade (PAXOS not supported in paper): "
+                f"{signal.direction.upper()} entry={signal.entry_price:.2f} "
+                f"sl={signal.stop_loss:.2f} tp={signal.take_profit:.2f} "
+                f"qty={quantity:.4f} RR={signal.rr_ratio:.1f}"
+            )
+            self._log_signal(signal, action="paper_logged", reject_reason="CRYPTO_PAPER_ONLY")
+            return None
+
         if not self.data.is_connected():
             execution_log.error("IBKR not connected — cannot place order.")
             return None
@@ -303,7 +317,7 @@ class ExecutionEngine:
                         f"{CONFIG.risk.max_slippage_pct*100:.3f}% — trade remains open."
                     )
 
-        elif status in ("Cancelled", "Inactive", "ApiCancelled"):
+        elif status in ("Cancelled", "Inactive", "ApiCancelled", "ApiError"):
             open_trade = self._active_trades.pop(order_id, None)
             if open_trade:
                 self.risk.register_closed_trade(order_id, open_trade.entry_price, status)

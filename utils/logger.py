@@ -8,7 +8,6 @@ Structured logging for the trading system.
 import csv
 import logging
 import os
-import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -35,10 +34,9 @@ def setup_logger(name: str, log_file: str, level: str = "INFO") -> logging.Logge
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    # Console
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setFormatter(fmt)
-    logger.addHandler(ch)
+    # Prevent propagation to root logger (avoids double-writes if ib_insync
+    # or any other library calls logging.basicConfig())
+    logger.propagate = False
 
     return logger
 

@@ -58,6 +58,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from risk.correlation_guard import CorrelationGuard
+from risk.news_blackout import NewsBlackout
 from strategy.regime import RegimeDetector
 from strategy.seasonality import SeasonalityCalendar
 from strategy.strategy import TradeSignal
@@ -100,6 +101,7 @@ class StrategyRouter:
         self._regime_detector = RegimeDetector()
         self._seasonality = SeasonalityCalendar()
         self._correlation_guard = CorrelationGuard()
+        self._news_blackout = NewsBlackout()
 
         # Instantiate all 7 instrument strategies
         _kwargs = dict(
@@ -135,6 +137,7 @@ class StrategyRouter:
         current_dt: datetime,
         open_positions: List,
         extra_data: Optional[Dict] = None,
+        d1_df: Optional[pd.DataFrame] = None,
     ) -> Optional[TradeSignal]:
         """
         Generate a trade signal for the given symbol, or return None.
@@ -170,11 +173,17 @@ class StrategyRouter:
             _log.warning("StrategyRouter: unknown symbol '%s', skipping", sym)
             return None
 
+        # --- News blackout check (before any expensive computation) ---
+        blocked, blackout_reason = self._news_blackout.is_blocked(sym, current_dt)
+        if blocked:
+            _log.info("StrategyRouter: %s NEWS BLACKOUT — %s", sym, blackout_reason)
+            return None
+
         _log.debug("StrategyRouter: routing %s at %s", sym, current_dt)
 
         # --- Generate signal ---
         try:
-            signal = self._call_strategy(strategy, sym, m15_df, h1_df, current_dt, extra)
+            signal = self._call_strategy(strategy, sym, m15_df, h1_df, current_dt, extra, d1_df)
         except Exception as exc:
             _log.error("StrategyRouter: unexpected error routing %s: %s", sym, exc, exc_info=True)
             return None
@@ -221,6 +230,7 @@ class StrategyRouter:
         h1_df: pd.DataFrame,
         current_dt: datetime,
         extra: Dict,
+        d1_df=None,
     ) -> Optional[TradeSignal]:
         """
         Dispatch to the correct strategy, passing extra_data where needed.
@@ -241,9 +251,10 @@ class StrategyRouter:
                 m15_df, h1_df, current_dt,
                 ratio=ratio,
                 gold_direction=gold_dir,
+                d1_df=d1_df,
             )
         else:
-            return strategy.generate_signal(m15_df, h1_df, current_dt)
+            return strategy.generate_signal(m15_df, h1_df, current_dt, d1_df=d1_df)
 
     # ------------------------------------------------------------------
     # Convenience accessors

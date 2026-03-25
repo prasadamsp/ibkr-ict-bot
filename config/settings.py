@@ -155,7 +155,7 @@ SYMBOLS: Dict[str, SymbolConfig] = {
         sec_type="CRYPTO",
         exchange="PAXOS",
         currency="USD",
-        what_to_show="TRADES",
+        what_to_show="AGGTRADES",
         lot_size=1.0,
         tick_size=0.01,
         contract_size=1.0,    # 1 BTC per lot
@@ -165,8 +165,9 @@ SYMBOLS: Dict[str, SymbolConfig] = {
         qty_step=0.0001,
     ),
     # OIL (US Crude) — CFD on WTI, 100 barrels per lot
+    # IBKR CFD symbol for WTI crude is "CL" on SMART exchange
     "OIL": SymbolConfig(
-        symbol="USOIL",
+        symbol="CL",
         sec_type="CFD",
         exchange="SMART",
         currency="USD",
@@ -267,6 +268,9 @@ class StrategyConfig:
     asian_open: str = "23:00"
     asian_close: str = "03:00"
 
+    # Take-profit cap — prevents absurdly wide TPs from ICT swing-high targets
+    max_rr_ratio: float = 5.0   # if natural TP gives RR > 5, clamp to 5R
+
     # Signal confluence
     min_confluence_score: float = 0.55
     score_weights: Dict[str, float] = field(default_factory=lambda: {
@@ -292,7 +296,7 @@ class StrategyConfig:
 class CacheConfig:
     enabled: bool = True
     cache_dir: str = "data/cache"
-    max_age_hours: float = 4.0   # regenerate if cache older than N hours
+    max_age_hours: float = 25.0  # regenerate if cache older than N hours (25h covers overnight)
 
 
 # ---------------------------------------------------------------------------

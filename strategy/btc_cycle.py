@@ -24,7 +24,7 @@ Usage:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
@@ -76,10 +76,10 @@ class HalvingClock:
     """
 
     HALVING_DATES: list[datetime] = [
-        datetime(2012, 11, 28),
-        datetime(2016,  7,  9),
-        datetime(2020,  5, 11),
-        datetime(2024,  4, 20),  # most recent halving
+        datetime(2012, 11, 28, tzinfo=timezone.utc),
+        datetime(2016,  7,  9, tzinfo=timezone.utc),
+        datetime(2020,  5, 11, tzinfo=timezone.utc),
+        datetime(2024,  4, 20, tzinfo=timezone.utc),  # most recent halving
     ]
 
     CYCLE_DAYS: int = 4 * 365  # ~1460 days
@@ -97,8 +97,13 @@ class HalvingClock:
         return max(past)
 
     def _resolve(self, dt: Optional[datetime]) -> datetime:
-        """Return `dt` if provided, else UTC now (naive)."""
-        return dt if dt is not None else datetime.utcnow()
+        """Return `dt` if provided, else UTC now (timezone-aware)."""
+        if dt is not None:
+            # Ensure tz-aware for comparison with HALVING_DATES
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=timezone.utc)
+            return dt
+        return datetime.now(tz=timezone.utc)
 
     # ------------------------------------------------------------------
     # Public API

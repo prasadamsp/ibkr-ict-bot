@@ -30,6 +30,48 @@ import pandas as pd
 
 
 # ---------------------------------------------------------------------------
+# ATR  (used for displacement filter)
+# ---------------------------------------------------------------------------
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average True Range over `period` bars."""
+    highs      = df["high"]
+    lows       = df["low"]
+    closes     = df["close"]
+    prev_close = closes.shift(1)
+    tr = pd.concat(
+        [highs - lows, (highs - prev_close).abs(), (lows - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    return tr.rolling(period, min_periods=1).mean()
+
+
+def is_displacement(
+    df: pd.DataFrame,
+    bar_idx: int,
+    atr_series: Optional[pd.Series] = None,
+    atr_period: int = 14,
+    min_atr_multiple: float = 1.0,
+) -> bool:
+    """
+    Return True if bar at bar_idx is a displacement candle (range >= min_atr × ATR).
+
+    Filters out weak BOS signals caused by small candles barely ticking past a level.
+    A true displacement is a decisive, high-energy candle — the hallmark of
+    institutional participation.
+    """
+    if bar_idx < 0 or bar_idx >= len(df):
+        return False
+    if atr_series is None:
+        atr_series = calculate_atr(df, period=atr_period)
+    atr_val   = float(atr_series.iloc[bar_idx])
+    bar_range = float(df.iloc[bar_idx]["high"] - df.iloc[bar_idx]["low"])
+    if atr_val <= 0:
+        return False
+    return bar_range >= min_atr_multiple * atr_val
+
+
+# ---------------------------------------------------------------------------
 # Swing detection
 # ---------------------------------------------------------------------------
 

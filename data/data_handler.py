@@ -19,6 +19,7 @@ step is needed. The updateEvent fires:
 """
 
 import asyncio
+import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -29,6 +30,12 @@ from ib_insync import IB, BarData, Contract, util
 from config.settings import CONFIG, CacheConfig, IBKRConfig, SymbolConfig
 from utils.logger import data_log
 
+# Symbols routed to alternative feeds instead of IBKR
+_ALT_FEED_SYMBOLS = {
+    "BTC": "binance",
+    "OIL": "twelvedata",
+}
+
 
 # ---------------------------------------------------------------------------
 # Contract factory
@@ -36,11 +43,19 @@ from utils.logger import data_log
 
 def make_contract(sym_cfg: SymbolConfig) -> Contract:
     """Build an ib_insync Contract from SymbolConfig."""
-    from ib_insync import Forex, Stock
+    from ib_insync import Forex, Stock, Crypto
 
     st = sym_cfg.sec_type
 
-    if st == "CFD":
+    if st == "CRYPTO":
+        c = Contract()
+        c.symbol = sym_cfg.symbol
+        c.secType = "CRYPTO"
+        c.exchange = sym_cfg.exchange
+        c.currency = sym_cfg.currency
+        return c
+
+    elif st == "CFD":
         c = Contract()
         c.symbol = sym_cfg.symbol
         c.secType = "CFD"
@@ -49,8 +64,9 @@ def make_contract(sym_cfg: SymbolConfig) -> Contract:
         return c
 
     elif st == "CASH":
-        # Forex — symbol is the base currency (e.g. "EUR" for EURUSD)
-        return Forex(sym_cfg.symbol)
+        # Forex — Forex() needs a 6-char pair like "EURUSD"
+        pair = sym_cfg.symbol + sym_cfg.currency  # e.g. "EUR" + "USD" = "EURUSD"
+        return Forex(pair, exchange=sym_cfg.exchange)
 
     elif st == "CMDTY":
         c = Contract()
@@ -169,11 +185,8 @@ def _load_from_cache(
         return None
 
     try:
-        df = pd.read_csv(p, index_col="datetime", parse_dates=True)
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC")
-        else:
-            df.index = df.index.tz_convert("UTC")
+        df = pd.read_csv(p, index_col="datetime")
+        df.index = pd.to_datetime(df.index, utc=True)
         df.sort_index(inplace=True)
         data_log.info(
             f"[cache] Loaded {len(df)} {symbol} {tf} bars from {p.name}"
@@ -232,6 +245,9 @@ class DataHandler:
 
         # Reconnect task handle
         self._reconnect_task: Optional[asyncio.Task] = None
+
+        # Alternative feeds (BTC → Binance, OIL → Twelve Data)
+        self._alt_feeds: Dict[str, object] = {}
 
         self.ib.disconnectedEvent += self._on_disconnect
 
@@ -407,27 +423,37 @@ class DataHandler:
         """
         Pre-load history AND subscribe to live updates in one call.
 
-        Uses a single reqHistoricalData with keepUpToDate=True per timeframe.
-        The updateEvent fires hasNewBar=True when a new bar period starts,
-        meaning the previous bar is now closed and confirmed.
+        For BTC: uses Binance WebSocket kline stream (no IBKR subscription needed).
+        For OIL: uses Twelve Data REST polling (IBKR CFD intraday unavailable).
+        For all others: uses IBKR reqHistoricalData with keepUpToDate=True.
 
         Args:
             symbol:     Symbol key.
             timeframes: E.g. ["M15", "H1"].
             callbacks:  Zero or more callables(symbol, tf, df) to fire on each
-                        M15 bar close. Equivalent to calling on_bar_close()
-                        before start_live_feed.
+                        M15 bar close.
         """
-        contract = await self._get_contract(symbol)
-        sym_cfg = CONFIG.symbols[symbol]
-
-        # Register any provided callbacks
+        # Register callbacks first (alt feeds fire them too)
         for cb in callbacks:
             for tf in timeframes:
                 self.on_bar_close(symbol, tf, cb)
 
+        alt_type = _ALT_FEED_SYMBOLS.get(symbol)
+
+        # ── Alternative feed path ───────────────────────────────────────
+        if alt_type == "binance":
+            await self._start_binance_feed(symbol, timeframes)
+            return
+
+        if alt_type == "twelvedata":
+            await self._start_twelvedata_feed(symbol, timeframes)
+            return
+
+        # ── IBKR feed path ──────────────────────────────────────────────
+        contract = await self._get_contract(symbol)
+        sym_cfg  = CONFIG.symbols[symbol]
+
         lookback_days = CONFIG.strategy.live_lookback_days
-        duration_str = _days_to_duration_str(lookback_days)
 
         for tf in timeframes:
             if symbol in self._subscriptions and tf in self._subscriptions[symbol]:
@@ -435,12 +461,32 @@ class DataHandler:
                 continue
 
             bar_size = TF_MAP[tf]
+
+            # Seed store from CSV cache (up to 25h old) before IBKR request.
+            # If IBKR times out (Error 162), cached bars ensure len(m15_df) >= 50.
+            cache_seeded = False
+            if self.cache_cfg.enabled:
+                cached = _load_from_cache(
+                    self.cache_cfg.cache_dir, symbol, tf,
+                    max_age_hours=25.0,
+                )
+                if cached is not None:
+                    self._store(symbol, tf, cached)
+                    cache_seeded = True
+                    data_log.info(
+                        f"[{symbol} {tf}] Seeded {len(cached)} bars from cache  "
+                        f"[{cached.index[0]} → {cached.index[-1]}]"
+                    )
+
+            # If cache is fresh, request only 2 days from IBKR to reduce pacing load.
+            # Otherwise request full lookback to build history.
+            ibkr_days = 2 if cache_seeded else lookback_days
+            duration_str = _days_to_duration_str(ibkr_days)
             data_log.info(
                 f"Starting live feed: {symbol} {tf}  "
-                f"(pre-loading {lookback_days} days of history)"
+                f"(IBKR: {ibkr_days}d, cache_seeded={cache_seeded})"
             )
 
-            # This single call handles both historical pre-load and live updates
             bars_list = self.ib.reqHistoricalData(
                 contract,
                 endDateTime="",
@@ -449,14 +495,13 @@ class DataHandler:
                 whatToShow=sym_cfg.what_to_show,
                 useRTH=False,
                 formatDate=1,
-                keepUpToDate=True,   # ← live updates enabled
+                keepUpToDate=True,
             )
 
             if symbol not in self._subscriptions:
                 self._subscriptions[symbol] = {}
             self._subscriptions[symbol][tf] = bars_list
 
-            # Seed initial bars from the historical portion
             if bars_list:
                 df = bars_to_df(bars_list)
                 self._store(symbol, tf, df)
@@ -465,9 +510,40 @@ class DataHandler:
                     f"[{df.index[0]} → {df.index[-1]}]"
                 )
 
-            # Wire update handler
             bars_list.updateEvent += self._make_update_handler(symbol, tf)
             data_log.info(f"[{symbol} {tf}] Live subscription active.")
+
+    async def _start_binance_feed(self, symbol: str, timeframes: List[str]) -> None:
+        """Start BTC feed via Binance WebSocket."""
+        from data.alt_feed import BinanceWSFeed
+        if symbol not in self._alt_feeds:
+            feed = BinanceWSFeed(
+                store_fn=self._store,
+                fire_fn=self._fire_callbacks,
+                cache_dir=self.cache_cfg.cache_dir,
+            )
+            self._alt_feeds[symbol] = feed
+        await self._alt_feeds[symbol].start(symbol, timeframes)
+
+    async def _start_twelvedata_feed(self, symbol: str, timeframes: List[str]) -> None:
+        """Start OIL feed via Twelve Data polling."""
+        from data.alt_feed import TwelveDataFeed
+        api_key = os.getenv("TWELVE_DATA_API_KEY", "")
+        if not api_key:
+            data_log.error(
+                f"[{symbol}] TWELVE_DATA_API_KEY not set — "
+                "OIL feed will not start. Add it to .env"
+            )
+            return
+        if symbol not in self._alt_feeds:
+            feed = TwelveDataFeed(
+                api_key=api_key,
+                store_fn=self._store,
+                fire_fn=self._fire_callbacks,
+                history_days=CONFIG.strategy.live_lookback_days,
+            )
+            self._alt_feeds[symbol] = feed
+        await self._alt_feeds[symbol].start(symbol, timeframes)
 
     # ------------------------------------------------------------------
     # Legacy subscribe_live  (kept for backward compatibility)

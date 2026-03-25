@@ -1,0 +1,145 @@
+# High-Impact News Calendar
+# ──────────────────────────────────────────────────────────────────────────────
+# Instruments affected by each event:
+#   ALL      → all 7 instruments
+#   USD      → XAUUSD, NAS100, EURUSD, GBPUSD, XAGUSD, OIL (anything USD-linked)
+#   EURUSD   → EURUSD only
+#   GBPUSD   → GBPUSD only
+#
+# Blackout window: trades are blocked from (time - before_min) to (time + after_min).
+# All times are UTC.
+#
+# Recurring events are handled automatically in code (NFP, EIA).
+# Add one-off events here: FOMC, CPI, ECB, BOE meeting dates.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Default blackout windows by event type (minutes before/after release)
+defaults:
+  fomc:       { before_min: 30, after_min: 60 }
+  cpi:        { before_min: 15, after_min: 30 }
+  nfp:        { before_min: 15, after_min: 30 }
+  boe:        { before_min: 15, after_min: 30 }
+  ecb:        { before_min: 15, after_min: 30 }
+  gdp:        { before_min: 10, after_min: 20 }
+  pce:        { before_min: 10, after_min: 20 }
+  eia:        { before_min: 5,  after_min: 15 }   # handled in OILStrategy too
+  retail:     { before_min: 10, after_min: 20 }
+  ppi:        { before_min: 10, after_min: 20 }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 FOMC Meeting Dates  (rate decision released ~18:00 UTC same day)
+# Source: federalreserve.gov/monetarypolicy/fomccalendars.htm
+# ──────────────────────────────────────────────────────────────────────────────
+fomc:
+  - { date: "2026-01-28", time: "19:00", instruments: ALL }
+  - { date: "2026-03-18", time: "18:00", instruments: ALL }
+  - { date: "2026-05-06", time: "18:00", instruments: ALL }
+  - { date: "2026-06-17", time: "18:00", instruments: ALL }
+  - { date: "2026-07-29", time: "18:00", instruments: ALL }
+  - { date: "2026-09-16", time: "18:00", instruments: ALL }
+  - { date: "2026-10-28", time: "18:00", instruments: ALL }
+  - { date: "2026-12-09", time: "19:00", instruments: ALL }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 US CPI Releases  (08:30 ET = 13:30 UTC)
+# ──────────────────────────────────────────────────────────────────────────────
+cpi:
+  - { date: "2026-01-15", time: "13:30", instruments: USD }
+  - { date: "2026-02-12", time: "13:30", instruments: USD }
+  - { date: "2026-03-12", time: "13:30", instruments: USD }
+  - { date: "2026-04-10", time: "13:30", instruments: USD }
+  - { date: "2026-05-13", time: "13:30", instruments: USD }
+  - { date: "2026-06-11", time: "13:30", instruments: USD }
+  - { date: "2026-07-14", time: "13:30", instruments: USD }
+  - { date: "2026-08-13", time: "13:30", instruments: USD }
+  - { date: "2026-09-11", time: "13:30", instruments: USD }
+  - { date: "2026-10-14", time: "13:30", instruments: USD }
+  - { date: "2026-11-12", time: "13:30", instruments: USD }
+  - { date: "2026-12-11", time: "13:30", instruments: USD }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 US PCE Releases  (08:30 ET = 13:30 UTC, last Friday of prior month)
+# ──────────────────────────────────────────────────────────────────────────────
+pce:
+  - { date: "2026-01-30", time: "13:30", instruments: USD }
+  - { date: "2026-02-27", time: "13:30", instruments: USD }
+  - { date: "2026-03-27", time: "13:30", instruments: USD }
+  - { date: "2026-04-30", time: "13:30", instruments: USD }
+  - { date: "2026-05-29", time: "13:30", instruments: USD }
+  - { date: "2026-06-26", time: "13:30", instruments: USD }
+  - { date: "2026-07-31", time: "13:30", instruments: USD }
+  - { date: "2026-08-28", time: "13:30", instruments: USD }
+  - { date: "2026-09-25", time: "13:30", instruments: USD }
+  - { date: "2026-10-30", time: "13:30", instruments: USD }
+  - { date: "2026-11-25", time: "13:30", instruments: USD }
+  - { date: "2026-12-23", time: "13:30", instruments: USD }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 BOE (Bank of England) Rate Decisions  (12:00 UTC)
+# ──────────────────────────────────────────────────────────────────────────────
+boe:
+  - { date: "2026-02-05", time: "12:00", instruments: GBPUSD }
+  - { date: "2026-03-19", time: "12:00", instruments: GBPUSD }
+  - { date: "2026-05-07", time: "11:00", instruments: GBPUSD }
+  - { date: "2026-06-18", time: "11:00", instruments: GBPUSD }
+  - { date: "2026-08-06", time: "11:00", instruments: GBPUSD }
+  - { date: "2026-09-17", time: "11:00", instruments: GBPUSD }
+  - { date: "2026-11-05", time: "12:00", instruments: GBPUSD }
+  - { date: "2026-12-17", time: "12:00", instruments: GBPUSD }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 ECB (European Central Bank) Rate Decisions  (13:15 UTC)
+# ──────────────────────────────────────────────────────────────────────────────
+ecb:
+  - { date: "2026-01-30", time: "13:15", instruments: EURUSD }
+  - { date: "2026-03-05", time: "13:15", instruments: EURUSD }
+  - { date: "2026-04-16", time: "13:15", instruments: EURUSD }
+  - { date: "2026-06-04", time: "13:15", instruments: EURUSD }
+  - { date: "2026-07-16", time: "13:15", instruments: EURUSD }
+  - { date: "2026-09-10", time: "13:15", instruments: EURUSD }
+  - { date: "2026-10-22", time: "13:15", instruments: EURUSD }
+  - { date: "2026-12-10", time: "13:15", instruments: EURUSD }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 US GDP Releases  (08:30 ET = 13:30 UTC, advance + revisions)
+# ──────────────────────────────────────────────────────────────────────────────
+gdp:
+  - { date: "2026-01-29", time: "13:30", instruments: USD }   # Q3 2025 final
+  - { date: "2026-02-26", time: "13:30", instruments: USD }   # Q4 2025 advance
+  - { date: "2026-04-29", time: "13:30", instruments: USD }   # Q1 2026 advance
+  - { date: "2026-07-29", time: "13:30", instruments: USD }   # Q2 2026 advance
+  - { date: "2026-10-28", time: "13:30", instruments: USD }   # Q3 2026 advance
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 US PPI Releases  (08:30 ET = 13:30 UTC)
+# ──────────────────────────────────────────────────────────────────────────────
+ppi:
+  - { date: "2026-01-16", time: "13:30", instruments: USD }
+  - { date: "2026-02-13", time: "13:30", instruments: USD }
+  - { date: "2026-03-13", time: "13:30", instruments: USD }
+  - { date: "2026-04-14", time: "13:30", instruments: USD }
+  - { date: "2026-05-14", time: "13:30", instruments: USD }
+  - { date: "2026-06-12", time: "13:30", instruments: USD }
+  - { date: "2026-07-15", time: "13:30", instruments: USD }
+  - { date: "2026-08-14", time: "13:30", instruments: USD }
+  - { date: "2026-09-12", time: "13:30", instruments: USD }
+  - { date: "2026-10-15", time: "13:30", instruments: USD }
+  - { date: "2026-11-13", time: "13:30", instruments: USD }
+  - { date: "2026-12-12", time: "13:30", instruments: USD }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 US Retail Sales  (08:30 ET = 13:30 UTC)
+# ──────────────────────────────────────────────────────────────────────────────
+retail:
+  - { date: "2026-01-16", time: "13:30", instruments: USD }
+  - { date: "2026-02-13", time: "13:30", instruments: USD }
+  - { date: "2026-03-17", time: "13:30", instruments: USD }
+  - { date: "2026-04-15", time: "13:30", instruments: USD }
+  - { date: "2026-05-15", time: "13:30", instruments: USD }
+  - { date: "2026-06-16", time: "13:30", instruments: USD }
+  - { date: "2026-07-17", time: "13:30", instruments: USD }
+  - { date: "2026-08-14", time: "13:30", instruments: USD }
+  - { date: "2026-09-16", time: "13:30", instruments: USD }
+  - { date: "2026-10-14", time: "13:30", instruments: USD }
+  - { date: "2026-11-17", time: "13:30", instruments: USD }
+  - { date: "2026-12-15", time: "13:30", instruments: USD }

@@ -129,6 +129,7 @@ class Backtester:
 
         sym_cfg = CONFIG.symbols.get(symbol)
         contract_size = sym_cfg.contract_size if sym_cfg else 1.0
+        max_position_size = sym_cfg.max_position_size if sym_cfg else 100.0
 
         open_position: Optional[dict] = None  # one position at a time for simplicity
 
@@ -221,7 +222,7 @@ class Backtester:
                     stop_dist = abs(signal.entry_price - signal.stop_loss)
                     if stop_dist > 0:
                         pnl_per_lot = stop_dist * contract_size
-                        qty = min(risk_amount / pnl_per_lot, self.risk_cfg.max_position_size)
+                        qty = min(risk_amount / pnl_per_lot, max_position_size)
                         qty = round(qty, 2)
                     else:
                         qty = 0.0

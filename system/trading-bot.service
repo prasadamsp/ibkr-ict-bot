@@ -14,7 +14,8 @@ WorkingDirectory=/opt/trading/IBKR
 # Use the venv Python
 ExecStart=/opt/trading/IBKR/.venv/bin/python main.py \
     --mode paper \
-    --port 4002
+    --port 4002 \
+    --symbols XAUUSD,NAS100,EURUSD,GBPUSD,BTC,XAGUSD,OIL
 
 # Wait 45s before starting — IB Gateway needs time to initialize
 ExecStartPre=/bin/sleep 45
