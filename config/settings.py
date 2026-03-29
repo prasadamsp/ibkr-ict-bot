@@ -149,6 +149,25 @@ SYMBOLS: Dict[str, SymbolConfig] = {
         min_qty=20_000.0,
         qty_step=1.0,
     ),
+    # GBPJPY — highest-vol major cross, ICT liquidity sweep strategy
+    # 1 standard lot = 100 000 GBP; P&L in JPY.
+    # pip_value ≈ ¥1 000/lot = ~$7/lot (at USD/JPY 145).
+    # Calibrate pip_value in JPY terms; risk manager uses USD equity.
+    # ⚠  Verify contract specs for your account region before going live.
+    "GBPJPY": SymbolConfig(
+        symbol="GBP",
+        sec_type="CASH",
+        exchange="IDEALPRO",
+        currency="JPY",
+        what_to_show="MIDPOINT",
+        lot_size=1.0,
+        tick_size=0.01,            # 1 pip = 0.01 JPY
+        contract_size=100_000.0,   # 1 standard lot = 100k GBP
+        pip_value=1_000.0,         # ¥1 000 per pip per lot (approx at USDJPY 145)
+        max_position_size=5.0,     # 5 lots max (smaller than GBPUSD — higher vol)
+        min_qty=20_000.0,          # IBKR IDEALPRO minimum 20k units
+        qty_step=1.0,
+    ),
     # BTC — Crypto via PAXOS. 1 lot = 1 BTC, $1 move = $1 P&L.
     "BTC": SymbolConfig(
         symbol="BTC",
@@ -327,7 +346,7 @@ class Config:
     seasonality: SeasonalityConfig = field(default_factory=SeasonalityConfig)
     symbols: Dict[str, SymbolConfig] = field(default_factory=lambda: SYMBOLS)
     active_symbols: List[str] = field(
-        default_factory=lambda: ["XAUUSD", "NAS100", "EURUSD", "GBPUSD", "BTC", "XAGUSD", "OIL"]
+        default_factory=lambda: ["XAUUSD", "NAS100", "EURUSD", "GBPUSD", "BTC", "XAGUSD", "OIL", "GBPJPY"]
     )
     paper_trading: bool = True   # NEVER set False without review
 

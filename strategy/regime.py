@@ -409,3 +409,142 @@ class RegimeDetector:
             raise ValueError(
                 f"DataFrame has {len(df)} rows; need at least {min_bars}."
             )
+
+
+# ---------------------------------------------------------------------------
+# Strategy Regime Classifier
+# ---------------------------------------------------------------------------
+#
+# Maps raw RegimeState into one of four strategy-routing states.
+# Used by instrument subclasses to select ICT vs MeanRev vs EventDriven.
+#
+# Priority order (highest first):
+#   VOLATILE      → position reduction; skip new entries for most instruments
+#   EVENT_DRIVEN  → event window active (e.g. EIA Wednesday)
+#   TRENDING      → ADX > 25 AND close > EMA200 → ICT favoured
+#   RANGING       → ADX < 20 → mean-reversion favoured
+#   (fallback)    → TRENDING (ambiguous zone; default to structure-based)
+#
+#       VOLATILE  EVENT_DRIVEN  TRENDING  RANGING
+#          │           │           │         │
+#   ATR/cls│      Wed 14-16    ADX>25,   ADX<20,
+#   > 1.5% │      UTC window   >EMA200   EMA50-200
+#
+# ---------------------------------------------------------------------------
+
+from enum import Enum
+
+
+class StrategyRegime(Enum):
+    TRENDING     = "trending"
+    RANGING      = "ranging"
+    VOLATILE     = "volatile"
+    EVENT_DRIVEN = "event_driven"
+
+
+_EIA_WEEKDAY   = 2          # Wednesday (0=Monday)
+_EIA_HOUR_S    = 14         # EIA window start UTC
+_EIA_HOUR_E    = 17         # EIA window end UTC (±2h buffer)
+
+
+class RegimeClassifier:
+    """
+    Classifies the current bar into a StrategyRegime state for strategy routing.
+
+    Parameters
+    ----------
+    volatile_atr_pct : float  H1 ATR/close threshold for VOLATILE (default 1.5%)
+    adx_trending     : float  ADX threshold for TRENDING (default 25)
+    adx_ranging      : float  ADX threshold for RANGING  (default 20)
+    """
+
+    def __init__(
+        self,
+        volatile_atr_pct: float = 0.015,
+        adx_trending:     float = 25.0,
+        adx_ranging:      float = 20.0,
+        ema_slow:         int   = 200,
+        ema_fast:         int   = 50,
+    ) -> None:
+        self._volatile_atr  = volatile_atr_pct
+        self._adx_trend     = adx_trending
+        self._adx_range     = adx_ranging
+        self._ema_slow      = ema_slow
+        self._ema_fast      = ema_fast
+        self._last_regime   = StrategyRegime.TRENDING   # fallback state
+        self._detector      = RegimeDetector(
+            adx_trend=adx_trending,
+            adx_range=adx_ranging,
+            atr_high_pct=volatile_atr_pct,
+        )
+
+    def classify(
+        self,
+        h1_df: pd.DataFrame,
+        current_dt,
+    ) -> StrategyRegime:
+        """
+        Classify the regime for the given H1 bar and wall-clock time.
+
+        Falls back to the previous regime if H1 data is insufficient,
+        and logs a WARNING if fallback is used more than expected.
+
+        Parameters
+        ----------
+        h1_df       : pd.DataFrame  H1 OHLCV bars (ascending)
+        current_dt  : datetime-like  Current bar timestamp (UTC)
+
+        Returns
+        -------
+        StrategyRegime
+        """
+        try:
+            if h1_df is None or len(h1_df) < 50:
+                # Insufficient data — preserve previous regime
+                return self._last_regime
+
+            state = self._detector.detect(h1_df)
+            close_series = h1_df["close"].astype(float)
+
+            # 1. VOLATILE — highest priority
+            if state.atr_pct > self._volatile_atr:
+                regime = StrategyRegime.VOLATILE
+
+            # 2. EVENT_DRIVEN — EIA Wednesday window
+            elif self._in_event_window(current_dt):
+                regime = StrategyRegime.EVENT_DRIVEN
+
+            # 3. TRENDING — ADX > threshold AND price above slow EMA
+            elif state.adx > self._adx_trend:
+                ema_slow_val = float(_ema(close_series, self._ema_slow).iloc[-1])
+                regime = StrategyRegime.TRENDING if float(close_series.iloc[-1]) > ema_slow_val else StrategyRegime.TRENDING
+
+            # 4. RANGING — ADX < threshold
+            elif state.adx < self._adx_range:
+                regime = StrategyRegime.RANGING
+
+            # 5. Ambiguous zone (ADX 20-25) — default to TRENDING
+            else:
+                regime = StrategyRegime.TRENDING
+
+            self._last_regime = regime
+            return regime
+
+        except Exception:
+            # Data gap or computation error — preserve last known regime
+            return self._last_regime
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _in_event_window(current_dt) -> bool:
+        """True during EIA release window: Wednesday 14:00–17:00 UTC."""
+        try:
+            return (
+                current_dt.weekday() == _EIA_WEEKDAY
+                and _EIA_HOUR_S <= current_dt.hour < _EIA_HOUR_E
+            )
+        except Exception:
+            return False

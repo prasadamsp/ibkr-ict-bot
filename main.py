@@ -29,12 +29,22 @@ from risk.risk_manager import RiskManager
 from strategy.router import StrategyRouter
 from utils.logger import TradeLogger, system_log
 
+# Phase 2: adaptive system — import lazily to avoid hard sklearn dependency
+def _make_router(strategy_cfg, risk_cfg, adaptive: bool):
+    if adaptive:
+        try:
+            from strategy.adaptive import AdaptiveRouter
+            return AdaptiveRouter(strategy_cfg, risk_cfg)
+        except ImportError as e:
+            system_log.warning(f"AdaptiveRouter unavailable ({e}), using StrategyRouter")
+    return StrategyRouter(strategy_cfg, risk_cfg)
+
 
 # ---------------------------------------------------------------------------
 # Live / Paper trading loop  (multi-symbol)
 # ---------------------------------------------------------------------------
 
-async def run_live(symbols: list[str], paper: bool = True) -> None:
+async def run_live(symbols: list[str], paper: bool = True, adaptive: bool = False) -> None:
     """
     Multi-symbol live/paper trading loop.
 
@@ -88,7 +98,7 @@ async def run_live(symbols: list[str], paper: bool = True) -> None:
         )
 
     # ── Per-symbol setup ─────────────────────────────────────────────────────
-    router = StrategyRouter(CONFIG.strategy, CONFIG.risk)
+    router = _make_router(CONFIG.strategy, CONFIG.risk, adaptive)
 
     for sym in symbols:
 
@@ -384,6 +394,16 @@ def parse_args() -> argparse.Namespace:
         help="Starting equity for backtest (default: 50000)",
     )
 
+    parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help=(
+            "Enable Phase 2 self-adaptive system: ML regime classifier, "
+            "Sharpe-weighted position sizing, rolling parameter tuning. "
+            "Requires scikit-learn. Falls back to standard router if unavailable."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -433,7 +453,7 @@ def main() -> None:
         from ib_insync import util
         util.startLoop()
         asyncio.get_event_loop().run_until_complete(
-            run_live(symbols, paper=(args.mode == "paper"))
+            run_live(symbols, paper=(args.mode == "paper"), adaptive=args.adaptive)
         )
 
     else:

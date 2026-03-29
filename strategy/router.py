@@ -44,7 +44,7 @@ If extra_data is None or keys are missing, sensible defaults are used
 
 Supported symbols
 -----------------
-  XAUUSD, NAS100, EURUSD, GBPUSD, BTC, XAGUSD, OIL
+  XAUUSD, NAS100, EURUSD, GBPUSD, BTC, XAGUSD, OIL, GBPJPY
 
 Unknown symbols are logged at WARNING and return None.
 """
@@ -65,6 +65,7 @@ from strategy.strategy import TradeSignal
 
 from strategy.instruments.btc    import BTCStrategy
 from strategy.instruments.eurusd import EURUSDStrategy
+from strategy.instruments.gbpjpy import GBPJPYStrategy
 from strategy.instruments.gbpusd import GBPUSDStrategy
 from strategy.instruments.nas100 import NAS100Strategy
 from strategy.instruments.oil    import OILStrategy
@@ -103,7 +104,7 @@ class StrategyRouter:
         self._correlation_guard = CorrelationGuard()
         self._news_blackout = NewsBlackout()
 
-        # Instantiate all 7 instrument strategies
+        # Instantiate all 8 instrument strategies
         _kwargs = dict(
             strategy_cfg=strategy_cfg,
             regime_detector=self._regime_detector,
@@ -117,6 +118,7 @@ class StrategyRouter:
             "BTC":    BTCStrategy(symbol="BTC",    **_kwargs),
             "XAGUSD": XAGUSDStrategy(symbol="XAGUSD", **_kwargs),
             "OIL":    OILStrategy(symbol="OIL",    **_kwargs),
+            "GBPJPY": GBPJPYStrategy(symbol="GBPJPY", **_kwargs),
         }
 
         _log.info(

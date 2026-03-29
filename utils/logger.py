@@ -9,13 +9,19 @@ import csv
 import logging
 import os
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
+from logging.handlers import WatchedFileHandler
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 
 def setup_logger(name: str, log_file: str, level: str = "INFO") -> logging.Logger:
-    """Create a logger with rotating file handler and console output."""
+    """Create a logger that survives external log rotation (logrotate).
+
+    Uses WatchedFileHandler instead of RotatingFileHandler: it checks the
+    file's inode on every write and reopens if logrotate has renamed it,
+    so logs always go to the current system.log rather than a rotated .1 file.
+    Systemd's StandardOutput=append: handles size-based archiving independently.
+    """
     Path(os.path.dirname(log_file)).mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger(name)
@@ -29,8 +35,8 @@ def setup_logger(name: str, log_file: str, level: str = "INFO") -> logging.Logge
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Rotating file: 10MB max, keep 5 files
-    fh = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
+    # WatchedFileHandler detects external renames (logrotate) and reopens
+    fh = WatchedFileHandler(log_file)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
