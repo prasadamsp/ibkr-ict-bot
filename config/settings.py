@@ -373,6 +373,10 @@ def _apply_env_overrides(cfg: Config) -> None:
     if v := os.getenv("MAX_DAILY_LOSS"):
         cfg.risk.max_daily_loss = float(v)
 
+    # Strategy
+    if v := os.getenv("MIN_CONFLUENCE_SCORE"):
+        cfg.strategy.min_confluence_score = float(v)
+
     # Logging
     if v := os.getenv("LOG_LEVEL"):
         cfg.logging.log_level = v.upper()
