@@ -125,7 +125,9 @@ Data ranges extended to **2 years** (Mar 2024 → Mar 2026) after downloading fu
 | EURUSD | Validation | Aug–Dec 25 | 21 | 19.1% | -3.2% | -30.5 | 3.7% | ❌ FAIL |
 | OIL | Train | Jan–Feb 26 | 9 | 0.0% | -0.5% | -310 | 0.5% | — |
 | OIL | Validation | Feb–Mar 26 | 4 | 0.0% | -0.5% | -469 | 0.5% | ❌ FAIL |
-| BTC | — | *running* | — | — | — | — | — | 🔄 pending |
+| **BTC** | Train | Mar 24–Jun 25 | 164 | 23.2% | +11.3% | 29.5 | 1.4% | — |
+| **BTC** | Validation | Jun–Oct 25 | 78 | 19.2% | +0.7% | 6.7 | 2.7% | — |
+| **BTC** | **Test** | **Oct 25–Mar 26** | **59** | **27.1%** | **+1.1%** | **16.4** | **1.2%** | ✅ **PASS** |
 
 ### Key Findings
 
@@ -152,7 +154,7 @@ Data ranges extended to **2 years** (Mar 2024 → Mar 2026) after downloading fu
 | GBPUSD | failed val | +4.6% val | ❌ FAIL | ⚠️ gate pass, test fail |
 | XAUUSD | -8.2% val | +5.2% train | ❌ FAIL | ❌ FAIL |
 | EURUSD | -5.4% val | -3.2% val | ❌ FAIL | ❌ FAIL |
-| BTC | -0.2% (2 months) | 🔄 1 year running | ❌ FAIL | pending |
+| **BTC** | -0.2% (2 months) | **+1.1% test (1yr)** | ❌ FAIL | ✅ **PASS** |
 
 ---
 
