@@ -17,6 +17,15 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+# ---------------------------------------------------------------------------
+# Give-back rule constants
+# When monthly P&L exceeds 3× the expected monthly return, position size
+# is halved for the rest of the month — protecting gains already banked.
+# ---------------------------------------------------------------------------
+_GIVEBACK_TRIGGER     = 3.0   # monthly P&L > 3× expected → activate
+_GIVEBACK_MULTIPLIER  = 0.5   # cut all new positions to 50% size
+_EXPECTED_MONTHLY_PCT = 0.02  # 2% of equity = a solid month baseline
+
 from config.settings import CONFIG, RiskConfig, SymbolConfig
 from strategy.strategy import TradeSignal
 from utils.logger import risk_log
@@ -79,6 +88,12 @@ class RiskManager:
         self._kill_switch_active: bool = False
         self._last_reset_date: Optional[date] = None
 
+        # Give-back rule state
+        self._monthly_realized_pnl: float = 0.0
+        self._month_start_equity: float = 0.0
+        self._giveback_active: bool = False
+        self._last_reset_month: Optional[int] = None   # (year*12 + month)
+
     # ------------------------------------------------------------------
     # Account state
     # ------------------------------------------------------------------
@@ -104,6 +119,19 @@ class RiskManager:
         self._daily_realized_pnl = 0.0
         self._daily_trade_count = 0
         self._last_reset_date = today
+
+        # Monthly give-back reset — fires on the first daily reset of each month
+        month_key = today.year * 12 + today.month
+        if self._last_reset_month != month_key:
+            prev_monthly = self._monthly_realized_pnl
+            self._monthly_realized_pnl = 0.0
+            self._month_start_equity = equity
+            self._giveback_active = False
+            self._last_reset_month = month_key
+            risk_log.info(
+                f"Monthly reset: month={today.year}-{today.month:02d} "
+                f"prev_monthly_pnl={prev_monthly:.2f} giveback=OFF"
+            )
 
     def _check_kill_switch(self):
         """Activate kill switch if any hard limit is breached."""
@@ -244,6 +272,11 @@ class RiskManager:
         per_symbol_max = getattr(sym_cfg, "max_position_size", float("inf"))
         qty = min(raw_qty, per_symbol_max)
 
+        # Give-back rule: halve size when monthly gains are exceptional
+        if self._giveback_active:
+            qty *= _GIVEBACK_MULTIPLIER
+            risk_log.debug(f"Give-back active: size reduced to {_GIVEBACK_MULTIPLIER*100:.0f}%")
+
         # Round to lot step
         lot_step = getattr(sym_cfg, "qty_step", 1.0) or 1.0
         qty = round(qty / lot_step) * lot_step
@@ -314,11 +347,23 @@ class RiskManager:
             pnl = (trade.entry_price - exit_price) * trade.quantity * contract_size
 
         self._daily_realized_pnl += pnl
+        self._monthly_realized_pnl += pnl
 
         if pnl < 0:
             self._consecutive_losses += 1
         else:
             self._consecutive_losses = 0
+
+        # Give-back rule: protect exceptional winning months
+        if not self._giveback_active and self._month_start_equity > 0:
+            expected = self._month_start_equity * _EXPECTED_MONTHLY_PCT
+            if expected > 0 and self._monthly_realized_pnl >= _GIVEBACK_TRIGGER * expected:
+                self._giveback_active = True
+                risk_log.warning(
+                    f"GIVE-BACK RULE ACTIVATED: monthly_pnl=${self._monthly_realized_pnl:.2f} "
+                    f"exceeded {_GIVEBACK_TRIGGER}× expected (${expected:.2f}). "
+                    f"Position sizes cut to {_GIVEBACK_MULTIPLIER*100:.0f}% for rest of month."
+                )
 
         risk_log.info(
             f"Trade closed: {trade.symbol} {trade.direction} "
@@ -360,6 +405,8 @@ class RiskManager:
                 self._daily_realized_pnl / self._start_of_day_equity * 100
                 if self._start_of_day_equity > 0 else 0
             ),
+            "monthly_pnl": self._monthly_realized_pnl,
+            "giveback_active": self._giveback_active,
             "open_trades": len(self._open_trades),
             "daily_trade_count": self._daily_trade_count,
             "consecutive_losses": self._consecutive_losses,

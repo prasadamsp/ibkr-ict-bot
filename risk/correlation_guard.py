@@ -8,20 +8,30 @@ Exposure groups:
 - EQUITY:     NAS100.  Max 1 position.
 - CRYPTO:     BTC.     Max 1 position.
 
-Special rule:
+Special rules:
   Never hold XAUUSD long AND XAGUSD long simultaneously — both are USD-negative
   metals and virtually move in lock-step.
+
+  Concurrent FX gate: EURUSD and GBPUSD move at ~0.85 correlation.  When both
+  generate a signal within a 4-hour window, only the higher-confluence signal
+  is allowed through.  Use record_signal() after approval and
+  should_skip_concurrent_fx() before passing a signal downstream.
 
 Usage:
     guard = CorrelationGuard()
     ok, reason = guard.can_open("XAUUSD", "long", open_positions)
     if not ok:
         print(f"Blocked: {reason}")
+
+    # Concurrent FX gate
+    skip, reason = guard.should_skip_concurrent_fx("GBPUSD", "long", 0.72, now)
+    if not skip:
+        guard.record_signal("GBPUSD", "long", 0.72, now)
 """
 
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Dict, List, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +45,15 @@ class OpenPosition:
     direction: str   # "long" or "short"
     size: float
     opened_at: datetime
+
+
+@dataclass
+class _RecentSignal:
+    """Tracks a recently generated signal for the concurrent-FX gate."""
+    symbol:          str
+    direction:       str
+    confluence:      float
+    generated_at:    datetime
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +83,13 @@ class CorrelationGuard:
     METALS: frozenset = frozenset({"XAUUSD", "XAGUSD"})
     """Precious metals — highly correlated sub-group within USD_PAIRS."""
 
+    # Highly correlated FX pairs — only the highest-confluence signal wins
+    # within a 4-hour window when both fire simultaneously.
+    FX_CORRELATED: frozenset = frozenset({"EURUSD", "GBPUSD"})
+    """EUR/USD and GBP/USD move together ~0.85 correlation. One at a time."""
+
+    _FX_SIGNAL_WINDOW_H = 4   # hours — recency window for concurrent FX gate
+
     # ----- Group limits -------------------------------------------------------
 
     _GROUP_LIMITS: Dict[str, int] = {
@@ -72,6 +98,10 @@ class CorrelationGuard:
         "EQUITY":    1,
         "CRYPTO":    1,
     }
+
+    def __init__(self) -> None:
+        # Recent-signal store for the concurrent FX gate (stateful)
+        self._recent_fx_signals: List[_RecentSignal] = []
 
     # ----- Public API ---------------------------------------------------------
 
@@ -156,6 +186,103 @@ class CorrelationGuard:
                 )
 
         return True, ""
+
+    def should_skip_concurrent_fx(
+        self,
+        symbol: str,
+        direction: str,
+        confluence: float,
+        now: datetime,
+    ) -> Tuple[bool, str]:
+        """
+        Concurrent FX gate: if a correlated FX peer already signaled in the
+        last *_FX_SIGNAL_WINDOW_H* hours with EQUAL OR HIGHER confluence,
+        block this signal.
+
+        Parameters
+        ----------
+        symbol:
+            Instrument that just generated a signal (e.g. "GBPUSD").
+        direction:
+            Signal direction ("long" or "short").
+        confluence:
+            Confluence score of the incoming signal.
+        now:
+            Timestamp of the current M15 bar close.
+
+        Returns
+        -------
+        (True, reason)
+            Block this signal — a peer with ≥ confluence already fired.
+        (False, "")
+            Allow this signal.
+        """
+        if symbol not in self.FX_CORRELATED:
+            return False, ""
+
+        self._purge_stale_fx_signals(now)
+
+        for sig in self._recent_fx_signals:
+            if sig.symbol == symbol:
+                continue   # don't compare an instrument against itself
+            # A different FX_CORRELATED peer fired recently with ≥ confluence
+            if sig.confluence >= confluence:
+                return (
+                    True,
+                    f"Concurrent FX gate: {sig.symbol} already signaled "
+                    f"({sig.direction}, confluence={sig.confluence:.2f}) within "
+                    f"{self._FX_SIGNAL_WINDOW_H}h window; {symbol} blocked "
+                    f"(confluence={confluence:.2f} ≤ peer).",
+                )
+
+        return False, ""
+
+    def record_signal(
+        self,
+        symbol: str,
+        direction: str,
+        confluence: float,
+        generated_at: datetime,
+    ) -> None:
+        """
+        Record a generated signal so future concurrent-FX gate checks can
+        compare against it.
+
+        Call this AFTER a signal has passed all guards and will be acted on,
+        so only real approved signals compete for the FX slot.
+
+        Parameters
+        ----------
+        symbol:
+            Instrument that produced the signal.
+        direction:
+            "long" or "short".
+        confluence:
+            Confluence score.
+        generated_at:
+            Timestamp of the bar that generated the signal.
+        """
+        if symbol not in self.FX_CORRELATED:
+            return
+        self._purge_stale_fx_signals(generated_at)
+        self._recent_fx_signals.append(
+            _RecentSignal(
+                symbol=symbol,
+                direction=direction,
+                confluence=confluence,
+                generated_at=generated_at,
+            )
+        )
+
+    # ----- Internal helpers --------------------------------------------------
+
+    def _purge_stale_fx_signals(self, now: datetime) -> None:
+        """Remove signals older than _FX_SIGNAL_WINDOW_H from the store."""
+        cutoff = now - timedelta(hours=self._FX_SIGNAL_WINDOW_H)
+        self._recent_fx_signals = [
+            s for s in self._recent_fx_signals
+            if s.generated_at >= cutoff
+        ]
 
     def get_group_exposure(
         self,

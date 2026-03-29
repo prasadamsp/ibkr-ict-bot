@@ -38,6 +38,7 @@ from strategy.liquidity import (
 from strategy.order_blocks import OrderBlock, detect_order_blocks, get_nearest_ob
 from strategy.cbdr import CBDRState, get_cbdr_state, cbdr_confluence_score, get_cbdr_tp
 from strategy.power_of_3 import AMDState, get_amd_state, amd_confluence_score
+from research.macro_filters import macro_confluence_delta
 from strategy.sessions import is_tradeable_session, session_score
 from strategy.structure import (
     calculate_atr, detect_bos, detect_mss, get_trend_bias, is_displacement,
@@ -345,10 +346,19 @@ class ICTStrategy:
             + 0.10 * (1.0 if score_breaker > 0 else 0.0)
         )
 
-        if confluence < self.cfg.min_confluence_score:
+        # Macro headwind: raise the confluence bar when macro is against the trade.
+        # For EURUSD we can pass h1_df as the USD proxy; for others, USD check is skipped.
+        macro_delta = macro_confluence_delta(
+            symbol, direction, h1_df,
+            eurusd_h1=(h1_df if symbol == "EURUSD" else None),
+        )
+        effective_threshold = self.cfg.min_confluence_score + macro_delta
+
+        if confluence < effective_threshold:
             strategy_log.debug(
                 f"{symbol} {direction}: Score {confluence:.2f} below threshold "
-                f"{self.cfg.min_confluence_score}"
+                f"{effective_threshold:.2f} (base={self.cfg.min_confluence_score:.2f} "
+                f"macro_delta=+{macro_delta:.2f})"
             )
             return None
 

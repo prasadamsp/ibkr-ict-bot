@@ -201,6 +201,19 @@ class StrategyRouter:
             _log.debug("StrategyRouter: %s correlation guard blocked — %s", sym, reason)
             return None
 
+        # --- Concurrent FX gate (EURUSD / GBPUSD) ---
+        skip, fx_reason = self._correlation_guard.should_skip_concurrent_fx(
+            sym, direction_str, signal.confluence_score, current_dt
+        )
+        if skip:
+            _log.info("StrategyRouter: %s CONCURRENT FX GATE — %s", sym, fx_reason)
+            return None
+
+        # Signal approved — record it so the peer can be gated if it fires shortly after
+        self._correlation_guard.record_signal(
+            sym, direction_str, signal.confluence_score, current_dt
+        )
+
         # --- Seasonality multiplier confirmation log ---
         season_mult = self._seasonality.get_multiplier(sym, current_dt)
         season_note = self._seasonality.get_note(sym, current_dt)

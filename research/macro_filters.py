@@ -118,6 +118,65 @@ def risk_on_off(h1_df: pd.DataFrame) -> int:
     return 0
 
 
+def macro_confluence_delta(
+    symbol: str,
+    direction: str,
+    h1_df: pd.DataFrame,
+    eurusd_h1: Optional[pd.DataFrame] = None,
+) -> float:
+    """
+    Return how much to RAISE the confluence threshold when macro is a headwind.
+
+    Instead of blocking trades outright, this raises the bar so that only
+    higher-quality setups survive against the macro tide.
+
+    Returns
+    -------
+    float — add this to min_confluence_score before the threshold check.
+        0.00  → macro aligned or neutral — trade normally
+        0.10  → mild headwind — require slightly more confirmation
+        0.15  → strong headwind — require meaningfully more confirmation
+
+    Examples
+    --------
+    - USD strong + signal is long EURUSD → +0.15 (strong headwind)
+      (note: outright block already handled by macro_allows_signal;
+       this fires for the cases that slip through allow_counter_carry=True)
+    - Risk-off + long NAS100 → +0.10 (neutral macro blocks this outright,
+      but if allow_risk_off=True, raise the bar)
+    - Carry against direction, neutral USD → +0.08
+    """
+    delta = 0.0
+    usd_bias = usd_strength_bias(eurusd_h1)
+    roo      = risk_on_off(h1_df) if (h1_df is not None and len(h1_df) >= 30) else 0
+    cb       = carry_bias(symbol)
+
+    # USD headwind for FX pairs
+    usd_sensitive = {"EURUSD", "GBPUSD", "GBPJPY"}
+    if symbol in usd_sensitive:
+        if usd_bias == 1 and direction == "long":
+            delta = max(delta, 0.15)   # trading long cable/euro vs strong USD
+        elif usd_bias == -1 and direction == "short":
+            delta = max(delta, 0.15)
+
+    # Risk-off headwind for risk assets
+    risk_assets = {"NAS100", "OIL"}
+    if roo == -1 and symbol in risk_assets:
+        delta = max(delta, 0.10)
+
+    # BTC: in strong risk-off (vol spike), require more confirmation
+    if symbol == "BTC" and roo == -1:
+        delta = max(delta, 0.10)
+
+    # Carry headwind
+    if cb == 1 and direction == "short":
+        delta = max(delta, 0.08)
+    elif cb == -1 and direction == "long":
+        delta = max(delta, 0.08)
+
+    return delta
+
+
 def macro_allows_signal(
     symbol: str,
     direction: str,
