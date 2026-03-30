@@ -62,7 +62,7 @@ from research.algos.ema_pullback import EMAPullbackAlgo
 from research.algos.macd_momentum import MACDMomentumAlgo
 from research.algos.bb_rsi     import BBRSIAlgo
 from research.algos.rsi_extreme import RSIExtremeAlgo
-from research.algos.zscore     import ZScoreAlgo
+from research.algos.zscore     import ZScoreReversionAlgo
 from research.algos.ma_crossover import MACrossoverAlgo
 from research.algos.ict_fvg    import ICTFVGAlgo
 
@@ -83,7 +83,7 @@ ALGO_REGISTRY: Dict[str, type] = {
     "macd_momentum":     MACDMomentumAlgo,
     "bb_rsi":            BBRSIAlgo,
     "rsi_extreme":       RSIExtremeAlgo,
-    "zscore_reversion":  ZScoreAlgo,
+    "zscore_reversion":  ZScoreReversionAlgo,
     "ma_crossover":      MACrossoverAlgo,
     "ict_fvg":           ICTFVGAlgo,
 }
