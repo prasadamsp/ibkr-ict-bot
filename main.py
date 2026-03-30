@@ -30,7 +30,12 @@ from strategy.router import StrategyRouter
 from utils.logger import TradeLogger, system_log
 
 # Phase 2: adaptive system — import lazily to avoid hard sklearn dependency
-def _make_router(strategy_cfg, risk_cfg, adaptive: bool):
+def _make_router(strategy_cfg, risk_cfg, adaptive: bool, router_type: str = "ict"):
+    # Research router — uses validated algo per instrument from best_algos.json
+    if router_type == "research":
+        from strategy.research_router import ResearchRouter
+        return ResearchRouter(strategy_cfg, risk_cfg)
+    # ICT adaptive router
     if adaptive:
         try:
             from strategy.adaptive import AdaptiveRouter
@@ -44,7 +49,7 @@ def _make_router(strategy_cfg, risk_cfg, adaptive: bool):
 # Live / Paper trading loop  (multi-symbol)
 # ---------------------------------------------------------------------------
 
-async def run_live(symbols: list[str], paper: bool = True, adaptive: bool = False) -> None:
+async def run_live(symbols: list[str], paper: bool = True, adaptive: bool = False, router_type: str = "ict") -> None:
     """
     Multi-symbol live/paper trading loop.
 
@@ -73,10 +78,11 @@ async def run_live(symbols: list[str], paper: bool = True, adaptive: bool = Fals
     # ── Shared components ────────────────────────────────────────────────────
     data_handler = DataHandler()
     risk_manager = RiskManager()
-    trade_logger = TradeLogger(
-        CONFIG.logging.trade_log_file,
-        CONFIG.logging.signal_log_file,
-    )
+    # Research router uses separate log files to enable side-by-side comparison
+    _sfx = "_research" if router_type == "research" else ""
+    _trade_log  = CONFIG.logging.trade_log_file.replace(".csv",  f"{_sfx}.csv")
+    _signal_log = CONFIG.logging.signal_log_file.replace(".csv", f"{_sfx}.csv")
+    trade_logger = TradeLogger(_trade_log, _signal_log)
     execution = ExecutionEngine(
         data_handler.ib,
         data_handler,
@@ -98,7 +104,8 @@ async def run_live(symbols: list[str], paper: bool = True, adaptive: bool = Fals
         )
 
     # ── Per-symbol setup ─────────────────────────────────────────────────────
-    router = _make_router(CONFIG.strategy, CONFIG.risk, adaptive)
+    router = _make_router(CONFIG.strategy, CONFIG.risk, adaptive, router_type)
+    system_log.info(f"Router: {router_type.upper()}  {'(adaptive)' if adaptive and router_type == 'ict' else ''}")
 
     for sym in symbols:
 
@@ -404,15 +411,40 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--router",
+        choices=["ict", "research"],
+        default="ict",
+        help=(
+            "Signal router to use. "
+            "'ict' (default): hand-crafted ICT strategies per instrument. "
+            "'research': validated research algos from data/research/best_algos.json. "
+            "Run both simultaneously on different --client-id values to A/B compare."
+        ),
+    )
+
+    parser.add_argument(
+        "--client-id",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "IBKR API client ID (default: 1). Use 2 for the research router instance "
+            "so both can connect to the same IB Gateway simultaneously."
+        ),
+    )
+
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    # CLI port override
+    # CLI overrides
     if args.port:
         CONFIG.ibkr.port = args.port
+    if args.client_id:
+        CONFIG.ibkr.client_id = args.client_id
 
     system_log.info("=" * 60)
     system_log.info(
@@ -453,7 +485,12 @@ def main() -> None:
         from ib_insync import util
         util.startLoop()
         asyncio.get_event_loop().run_until_complete(
-            run_live(symbols, paper=(args.mode == "paper"), adaptive=args.adaptive)
+            run_live(
+                symbols,
+                paper=(args.mode == "paper"),
+                adaptive=args.adaptive,
+                router_type=args.router,
+            )
         )
 
     else:

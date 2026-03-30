@@ -1,0 +1,39 @@
+[Unit]
+Description=ICT Trading Bot — Research Router (A/B parallel instance)
+After=network.target
+Wants=network.target
+
+# Run after the main ICT bot — both need IB Gateway to be up
+After=trading-bot.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trading/IBKR
+
+# Research router: validated algos from best_algos.json
+# clientId=2 so it connects alongside the main bot (clientId=1) to the same Gateway
+ExecStartPre=/bin/sleep 60
+ExecStart=/opt/trading/IBKR/.venv/bin/python main.py \
+    --mode paper \
+    --port 4002 \
+    --symbols XAUUSD,OIL,BTC,GBPUSD,EURUSD \
+    --router research \
+    --client-id 2
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=MIN_CONFLUENCE_SCORE=0.45
+EnvironmentFile=-/opt/trading/IBKR/.env
+
+# Restart policy
+Restart=on-failure
+RestartSec=30s
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+# Resource limits
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
