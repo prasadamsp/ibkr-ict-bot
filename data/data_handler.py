@@ -96,6 +96,15 @@ def make_contract(sym_cfg: SymbolConfig) -> Contract:
         # lastTradeDateOrContractMonth must be set by caller for futures
         return c
 
+    elif st == "CONTFUT":
+        # Continuous (rolling) futures contract — IBKR rolls automatically
+        c = Contract()
+        c.symbol = sym_cfg.symbol
+        c.secType = "CONTFUT"
+        c.exchange = sym_cfg.exchange
+        c.currency = sym_cfg.currency
+        return c
+
     else:
         raise ValueError(f"Unsupported sec_type: {st!r}")
 
@@ -311,12 +320,35 @@ class DataHandler:
     # ------------------------------------------------------------------
 
     async def _get_contract(self, symbol: str) -> Contract:
-        """Qualify and cache the IBKR contract for a symbol."""
+        """Qualify and cache the IBKR contract for a symbol.
+
+        CONTFUT contracts are resolved to the tradeable front-month FUT contract
+        via reqContractDetails — CONTFUT itself cannot be used for order placement.
+        """
         if symbol in self._contracts:
             return self._contracts[symbol]
 
         sym_cfg = CONFIG.symbols[symbol]
         contract = make_contract(sym_cfg)
+
+        # CONTFUT is a data-feed construct — not directly tradeable.
+        # Resolve to the front-month FUT contract for order placement.
+        if sym_cfg.sec_type == "CONTFUT":
+            data_log.info(f"Resolving CONTFUT front-month for {symbol} ...")
+            details = await self.ib.reqContractDetailsAsync(contract)
+            if not details:
+                raise ValueError(
+                    f"IBKR could not resolve CONTFUT for {symbol}. "
+                    f"Check symbol name and exchange."
+                )
+            front = details[0].contract
+            self._contracts[symbol] = front
+            data_log.info(
+                f"Contract qualified: {symbol} | conId={front.conId} "
+                f"secType={front.secType} exchange={front.exchange} "
+                f"expiry={front.lastTradeDateOrContractMonth}"
+            )
+            return self._contracts[symbol]
 
         data_log.info(f"Qualifying contract for {symbol} ...")
         qualified = await self.ib.qualifyContractsAsync(contract)
