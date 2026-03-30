@@ -183,19 +183,22 @@ SYMBOLS: Dict[str, SymbolConfig] = {
         min_qty=0.0001,
         qty_step=0.0001,
     ),
-    # OIL (US Crude) — CFD on WTI, 100 barrels per lot
-    # IBKR CFD symbol for WTI crude is "CL" on SMART exchange
+    # OIL (WTI Crude) — Continuous futures contract on NYMEX
+    # ContFuture rolls automatically — no expiry management needed.
+    # 1 CL contract = 1,000 barrels. $0.01 tick = $10/contract.
+    # At ~$70/bbl, 1 contract notional = ~$70,000. Use fractional qty.
+    # Verified: ContFuture('CL','NYMEX') qualifies as 'Light Sweet Crude Oil'
     "OIL": SymbolConfig(
         symbol="CL",
-        sec_type="CFD",
-        exchange="SMART",
+        sec_type="CONTFUT",
+        exchange="NYMEX",
         currency="USD",
-        what_to_show="MIDPOINT",
+        what_to_show="TRADES",
         lot_size=1.0,
         tick_size=0.01,
-        contract_size=100.0,  # 100 barrels per lot
-        pip_value=100.0,       # $100 per $1 move per lot
-        max_position_size=5.0,
+        contract_size=1000.0,  # 1,000 barrels per contract
+        pip_value=10.0,         # $10 per $0.01 tick per contract
+        max_position_size=2.0,  # max 2 contracts (2,000 barrels)
         min_qty=1.0,
         qty_step=1.0,
     ),
@@ -372,6 +375,8 @@ def _apply_env_overrides(cfg: Config) -> None:
         cfg.risk.risk_per_trade = float(v)
     if v := os.getenv("MAX_DAILY_LOSS"):
         cfg.risk.max_daily_loss = float(v)
+    if v := os.getenv("MIN_RR_RATIO"):
+        cfg.risk.min_rr_ratio = float(v)
 
     # Strategy
     if v := os.getenv("MIN_CONFLUENCE_SCORE"):
