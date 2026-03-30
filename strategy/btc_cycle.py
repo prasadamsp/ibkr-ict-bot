@@ -1,234 +1,244 @@
 """
-btc_cycle.py — Bitcoin Halving Cycle Clock
+btc_cycle.py — Bitcoin Halving Cycle Phase Awareness
 
-Tracks Bitcoin's ~4-year halving cycle and maps the current date to a named
-phase, directional bias, and position-size multiplier.
+Tracks which phase of the 4-year BTC halving cycle we are currently in
+and exposes helper functions that BTCStrategy can use to:
+  - determine the current cycle phase (enum)
+  - apply a position-size multiplier
+  - apply a directional bias filter
 
-Halving cycle phases (days since last halving):
-  - Year 1 (0–364):   "accumulation"  — market digesting the supply shock
-  - Year 2 (365–729): "bull"          — strong uptrend phase
-  - Year 3 (730–1094):"distribution"  — euphoria / blow-off tops
-  - Year 4 (1095+):   "bear"          — pre-halving contraction
+Halving schedule (block reward cut in half):
+  - Nov 28 2012 — 1st halving (50 → 25 BTC)
+  - Jul  9 2016 — 2nd halving (25 → 12.5 BTC)
+  - May 11 2020 — 3rd halving (12.5 → 6.25 BTC)
+  - Apr 20 2024 — 4th halving (6.25 → 3.125 BTC)  <-- most recent
 
-As of 2026-03-23 we are ~703 days post the April 2024 halving → "bull" phase.
+Phase boundaries (days elapsed since the last halving):
+  - MARKUP       0 – 365 days  : supply shock drives strong upward impulse
+  - LATE_BULL  366 – 730 days  : momentum continues, euphoria risk grows
+                                 (current as of Mar 2026 → ~340 days post-Apr 2024)
+  - DISTRIBUTION 731–1095 days : price peaks, smart money distributes
+  - ACCUMULATION 1096–1460 days: pre-halving base-building, lower volatility
 
-Usage:
-    from strategy.btc_cycle import HalvingClock
+Integration with BTCStrategy
+-----------------------------
+Typical call-site pattern::
 
-    clock = HalvingClock()
-    print(clock.get_phase())           # "bull"
-    print(clock.get_size_multiplier()) # 1.5
-    clock.summary()
+    from strategy.btc_cycle import get_cycle_phase, get_size_multiplier, get_direction_bias
+    from datetime import date
+
+    phase      = get_cycle_phase(date.today())
+    multiplier = get_size_multiplier(phase)   # e.g. 1.5
+    bias       = get_direction_bias(phase)    # e.g. +1
+
+    final_size = base_size * multiplier
+    # Skip short signals when bias == +1 (long-only filter)
+    if signal_direction == -1 and bias == 1:
+        return  # suppress short
+
+Usage example::
+
+    from strategy.btc_cycle import cycle_summary
+    from datetime import date
+
+    print(cycle_summary(date.today()))
+    # "BTC Cycle | Phase: LATE_BULL | Day 345/1460 | Size: 1.25x | Bias: LONG"
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import date
+from enum import Enum
+from typing import List
 
 
 # ---------------------------------------------------------------------------
-# Phase definitions — maps (year_number: int) → phase label
-# Year number is computed as floor(days_since_halving / 365) + 1, capped at 4
+# Halving dates — add future halvings here as they occur (~every 4 years)
 # ---------------------------------------------------------------------------
 
-_YEAR_TO_PHASE: dict[int, str] = {
-    1: "accumulation",
-    2: "bull",
-    3: "distribution",
-    4: "bear",
-}
-
-_PHASE_TO_BIAS: dict[str, str] = {
-    "accumulation": "long_preferred",
-    "bull":         "long_only",
-    "distribution": "short_preferred",
-    "bear":         "short_only",
-}
-
-_PHASE_TO_MULTIPLIER: dict[str, float] = {
-    "accumulation": 0.8,
-    "bull":         1.5,
-    "distribution": 0.6,
-    "bear":         0.3,
-}
+HALVING_DATES: List[date] = [
+    date(2012, 11, 28),  # 1st halving: 50 → 25 BTC/block
+    date(2016,  7,  9),  # 2nd halving: 25 → 12.5 BTC/block
+    date(2020,  5, 11),  # 3rd halving: 12.5 → 6.25 BTC/block
+    date(2024,  4, 20),  # 4th halving: 6.25 → 3.125 BTC/block  <-- most recent
+    # date(2028, ~Apr):  # 5th halving — add when confirmed
+]
 
 
 # ---------------------------------------------------------------------------
-# Main class
+# Phase enum
 # ---------------------------------------------------------------------------
 
-class HalvingClock:
-    """
-    Tracks Bitcoin's 4-year halving cycle.
+class BtcCyclePhase(Enum):
+    """Named phases of Bitcoin's 4-year halving cycle.
 
-    All public methods accept an optional `dt` (datetime) argument.
-    When `dt` is None, the current UTC wall-clock time is used.
-
-    Class constants
-    ---------------
-    HALVING_DATES : list[datetime]
-        All known Bitcoin block-reward halving dates.
-
-    CYCLE_DAYS : int
-        Approximate days in one full cycle (4 * 365 = 1460).
+    Boundary logic (days since last halving):
+      MARKUP          0 –  365  Supply shock, historically strongest uptrend.
+      LATE_BULL     366 –  730  Continued momentum, elevated risk of reversal.
+      DISTRIBUTION  731 – 1095  Cycle top region, smart-money distribution.
+      ACCUMULATION 1096 – 1460  Pre-halving base, reduced volatility, no shorts.
     """
 
-    HALVING_DATES: list[datetime] = [
-        datetime(2012, 11, 28, tzinfo=timezone.utc),
-        datetime(2016,  7,  9, tzinfo=timezone.utc),
-        datetime(2020,  5, 11, tzinfo=timezone.utc),
-        datetime(2024,  4, 20, tzinfo=timezone.utc),  # most recent halving
-    ]
+    MARKUP       = "MARKUP"
+    LATE_BULL    = "LATE_BULL"
+    DISTRIBUTION = "DISTRIBUTION"
+    ACCUMULATION = "ACCUMULATION"
 
-    CYCLE_DAYS: int = 4 * 365  # ~1460 days
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Core functions
+# ---------------------------------------------------------------------------
 
-    def _last_halving(self, dt: datetime) -> datetime:
-        """Return the most recent halving date that is <= `dt`."""
-        past = [h for h in self.HALVING_DATES if h <= dt]
-        if not past:
-            # Before the first known halving — return the earliest one
-            return self.HALVING_DATES[0]
-        return max(past)
+def get_cycle_phase(as_of: date) -> BtcCyclePhase:
+    """Return the BTC halving cycle phase for a given date.
 
-    def _resolve(self, dt: Optional[datetime]) -> datetime:
-        """Return `dt` if provided, else UTC now (timezone-aware)."""
-        if dt is not None:
-            # Ensure tz-aware for comparison with HALVING_DATES
-            if dt.tzinfo is None:
-                return dt.replace(tzinfo=timezone.utc)
-            return dt
-        return datetime.now(tz=timezone.utc)
+    Algorithm
+    ---------
+    1. Find the most recent halving date that is <= `as_of`.
+    2. Calculate days_elapsed = (as_of - last_halving).days
+    3. Map days_elapsed to a BtcCyclePhase using the boundaries:
+         [0,   365] → MARKUP
+         [366, 730] → LATE_BULL
+         [731, 1095]→ DISTRIBUTION
+         [1096+]    → ACCUMULATION
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    Parameters
+    ----------
+    as_of : date
+        The reference date for which to determine the cycle phase.
 
-    def days_since_halving(self, dt: Optional[datetime] = None) -> int:
-        """
-        Return the number of whole days elapsed since the last halving.
+    Returns
+    -------
+    BtcCyclePhase
+        The phase the market is currently in.
 
-        Parameters
-        ----------
-        dt : datetime, optional  Reference date (default: now UTC).
+    Examples
+    --------
+    >>> get_cycle_phase(date(2024, 10, 20))   # ~183 days after Apr-2024 halving
+    <BtcCyclePhase.MARKUP: 'MARKUP'>
+    >>> get_cycle_phase(date(2026, 3, 15))    # ~330 days → LATE_BULL
+    <BtcCyclePhase.LATE_BULL: 'LATE_BULL'>
+    """
+    # TODO: implement phase detection
+    #   Steps:
+    #     1. Filter HALVING_DATES to those <= as_of, take the max.
+    #     2. Compute days_elapsed = (as_of - last_halving).days
+    #     3. Use if/elif ladder to map days_elapsed to a BtcCyclePhase member.
+    #   Edge cases to handle:
+    #     - as_of is before ALL known halvings → treat as ACCUMULATION or raise?
+    #     - as_of is exactly on a halving date → counts as day 0 → MARKUP
+    raise NotImplementedError("TODO: implement get_cycle_phase")
 
-        Returns
-        -------
-        int  Number of days (>= 0).
-        """
-        dt = self._resolve(dt)
-        last = self._last_halving(dt)
-        delta = dt - last
-        return max(0, delta.days)
 
-    def get_phase(self, dt: Optional[datetime] = None) -> str:
-        """
-        Return the current cycle phase name.
+def get_size_multiplier(phase: BtcCyclePhase) -> float:
+    """Return a position-size multiplier for the given cycle phase.
 
-        Phases by year (365-day buckets):
-          Year 1 (days   0–364): "accumulation"
-          Year 2 (days 365–729): "bull"
-          Year 3 (days 730–1094):"distribution"
-          Year 4 (days 1095+):   "bear"
+    The multiplier is applied to the base position size calculated by
+    the risk manager before sending orders.  Values > 1.0 increase size;
+    values < 1.0 reduce it.
 
-        Parameters
-        ----------
-        dt : datetime, optional
+    Suggested multipliers (adjust after back-testing):
+      MARKUP        → 1.50  (max aggression — strong trend, tight stops)
+      LATE_BULL     → 1.25  (still bullish but approaching cycle peak)
+      DISTRIBUTION  → 0.75  (reduce exposure, trend losing momentum)
+      ACCUMULATION  → 0.50  (base-building, high uncertainty)
 
-        Returns
-        -------
-        str  One of: "accumulation", "bull", "distribution", "bear"
-        """
-        days = self.days_since_halving(dt)
-        # Determine which year of the cycle we're in (1-indexed, max 4)
-        year = min(days // 365 + 1, 4)
-        return _YEAR_TO_PHASE[year]
+    Parameters
+    ----------
+    phase : BtcCyclePhase
+        The current cycle phase enum member.
 
-    def get_direction_bias(self, dt: Optional[datetime] = None) -> str:
-        """
-        Return the directional trading bias for the current phase.
+    Returns
+    -------
+    float
+        Multiplier in the range [0.5, 1.5].
 
-        Mapping:
-          "bull"         → "long_only"
-          "accumulation" → "long_preferred"
-          "distribution" → "short_preferred"
-          "bear"         → "short_only"
+    Raises
+    ------
+    ValueError
+        If `phase` is not a recognised BtcCyclePhase member.
+    """
+    # TODO: implement via a dict lookup or match/case statement.
+    #   _PHASE_MULTIPLIERS = {
+    #       BtcCyclePhase.MARKUP:       1.50,
+    #       BtcCyclePhase.LATE_BULL:    1.25,
+    #       BtcCyclePhase.DISTRIBUTION: 0.75,
+    #       BtcCyclePhase.ACCUMULATION: 0.50,
+    #   }
+    #   return _PHASE_MULTIPLIERS[phase]
+    raise NotImplementedError("TODO: implement get_size_multiplier")
 
-        Parameters
-        ----------
-        dt : datetime, optional
 
-        Returns
-        -------
-        str
-        """
-        phase = self.get_phase(dt)
-        return _PHASE_TO_BIAS[phase]
+def get_direction_bias(phase: BtcCyclePhase) -> int:
+    """Return a directional trading bias integer for the given cycle phase.
 
-    def get_size_multiplier(self, dt: Optional[datetime] = None) -> float:
-        """
-        Return a position-size multiplier for the current cycle phase.
+    The bias is used by BTCStrategy as a filter:
+      +1  → LONG only   (suppress all short signals)
+       0  → NEUTRAL     (allow both directions, normal logic)
+      -1  → SHORT only  (suppress all long signals)  [reserved, not used yet]
 
-        Multipliers:
-          "bull"         → 1.5  (maximum aggression)
-          "accumulation" → 0.8  (cautious building)
-          "distribution" → 0.6  (reduce longs, small shorts)
-          "bear"         → 0.3  (minimal exposure)
+    Suggested biases:
+      MARKUP        → +1  (long-only, no shorts)
+      LATE_BULL     → +1  (long-only, no shorts)
+      DISTRIBUTION  →  0  (neutral — both directions OK, reduced size)
+      ACCUMULATION  →  0  (neutral — avoid shorts near potential bottom)
 
-        Parameters
-        ----------
-        dt : datetime, optional
+    Parameters
+    ----------
+    phase : BtcCyclePhase
+        The current cycle phase enum member.
 
-        Returns
-        -------
-        float
-        """
-        phase = self.get_phase(dt)
-        return _PHASE_TO_MULTIPLIER[phase]
+    Returns
+    -------
+    int
+        One of: +1 (long), 0 (neutral), -1 (short).
 
-    def next_halving_estimate(self) -> datetime:
-        """
-        Estimate the date of the next halving.
+    Raises
+    ------
+    ValueError
+        If `phase` is not a recognised BtcCyclePhase member.
+    """
+    # TODO: implement via a dict lookup or match/case statement.
+    #   _PHASE_BIAS = {
+    #       BtcCyclePhase.MARKUP:       +1,
+    #       BtcCyclePhase.LATE_BULL:    +1,
+    #       BtcCyclePhase.DISTRIBUTION:  0,
+    #       BtcCyclePhase.ACCUMULATION:  0,
+    #   }
+    #   return _PHASE_BIAS[phase]
+    raise NotImplementedError("TODO: implement get_direction_bias")
 
-        Approximation: last known halving + 4 years (1460 days).
-        Bitcoin targets ~210,000 blocks between halvings at ~10 min/block.
 
-        Returns
-        -------
-        datetime  Approximate next halving date.
-        """
-        last = self.HALVING_DATES[-1]
-        return last + timedelta(days=self.CYCLE_DAYS)
+def cycle_summary(as_of: date) -> str:
+    """Return a human-readable one-line status string for the cycle state.
 
-    def summary(self, dt: Optional[datetime] = None) -> None:
-        """
-        Print a human-readable summary of the current halving cycle state.
+    Intended for logging, dashboard display, and quick operator checks.
 
-        Parameters
-        ----------
-        dt : datetime, optional  Reference date (default: now UTC).
-        """
-        dt = self._resolve(dt)
-        phase      = self.get_phase(dt)
-        bias       = self.get_direction_bias(dt)
-        multiplier = self.get_size_multiplier(dt)
-        days       = self.days_since_halving(dt)
-        last       = self._last_halving(dt)
-        next_est   = self.next_halving_estimate()
+    Format::
 
-        print("=" * 50)
-        print("  Bitcoin Halving Cycle Summary")
-        print("=" * 50)
-        print(f"  Reference date  : {dt.strftime('%Y-%m-%d')}")
-        print(f"  Last halving    : {last.strftime('%Y-%m-%d')}")
-        print(f"  Days elapsed    : {days} days")
-        print(f"  Cycle phase     : {phase.upper()}")
-        print(f"  Direction bias  : {bias}")
-        print(f"  Size multiplier : {multiplier}")
-        print(f"  Next halving    : ~{next_est.strftime('%Y-%m-%d')} (est.)")
-        print("=" * 50)
+        "BTC Cycle | Phase: LATE_BULL | Day 345/1460 | Size: 1.25x | Bias: LONG"
+
+    Parameters
+    ----------
+    as_of : date
+        The reference date for the summary.
+
+    Returns
+    -------
+    str
+        Single-line status string.
+
+    Example
+    -------
+    >>> print(cycle_summary(date(2026, 3, 15)))
+    BTC Cycle | Phase: LATE_BULL | Day 330/1460 | Size: 1.25x | Bias: LONG
+    """
+    # TODO: implement the summary string.
+    #   Steps:
+    #     1. Call get_cycle_phase(as_of) → phase
+    #     2. Compute days_elapsed (reuse logic from get_cycle_phase or extract helper)
+    #     3. Call get_size_multiplier(phase) → multiplier
+    #     4. Call get_direction_bias(phase)  → bias_int
+    #     5. Convert bias_int to a label: +1 → "LONG", 0 → "NEUTRAL", -1 → "SHORT"
+    #     6. Format and return the string.
+    raise NotImplementedError("TODO: implement cycle_summary")
