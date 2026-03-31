@@ -381,6 +381,8 @@ def _apply_env_overrides(cfg: Config) -> None:
     # Strategy
     if v := os.getenv("MIN_CONFLUENCE_SCORE"):
         cfg.strategy.min_confluence_score = float(v)
+    if v := os.getenv("ENTRY_TYPE"):
+        cfg.strategy.entry_type = v.lower()  # "market" or "limit"
 
     # Logging
     if v := os.getenv("LOG_LEVEL"):

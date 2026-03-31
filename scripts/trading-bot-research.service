@@ -25,6 +25,7 @@ ExecStart=/opt/trading/IBKR/.venv/bin/python main.py \
 Environment=PYTHONUNBUFFERED=1
 Environment=MIN_CONFLUENCE_SCORE=0.45
 Environment=MIN_RR_RATIO=1.5
+Environment=ENTRY_TYPE=market
 EnvironmentFile=-/opt/trading/IBKR/.env
 
 # Restart policy
