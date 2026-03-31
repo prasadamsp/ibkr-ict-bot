@@ -250,7 +250,17 @@ class ExecutionEngine:
             # Check if the order is still pending (not yet filled)
             open_orders = {str(o.orderId) for o in self.ib.openOrders()}
             if order_id not in open_orders:
-                # Already filled or cancelled — clean up
+                # Not in open orders — either filled, cancelled, or lost after reconnect.
+                # Also check ib.trades() to distinguish filled vs unknown.
+                all_trade_ids = {str(t.order.orderId) for t in self.ib.trades()}
+                if order_id not in all_trade_ids:
+                    # Completely unknown to IBKR (e.g. dropped after reconnect) — purge
+                    execution_log.warning(
+                        f"Order {order_id} ({trade.symbol} {trade.direction}) not found "
+                        f"in IBKR trades after reconnect — purging from active trades."
+                    )
+                    self.risk.register_closed_trade(order_id, trade.entry_price, "reconnect_purge")
+                    self._active_trades.pop(order_id, None)
                 self._order_placed_at_bar.pop(order_id, None)
                 continue
 
