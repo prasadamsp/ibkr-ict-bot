@@ -1,4 +1,11 @@
-"""MACD histogram momentum — enter when histogram flips sign after extreme."""
+"""MACD histogram momentum — enter when histogram flips sign after extreme.
+
+Filters applied (v2):
+  1. H1 EMA trend alignment — only long above H1 EMA, only short below.
+     Eliminates flip-flopping against the prevailing trend.
+  2. Minimum histogram extreme — prev histogram must exceed hist_threshold
+     (as fraction of ATR) before crossing counts.  Filters noise crossings.
+"""
 from __future__ import annotations
 from typing import Optional
 import numpy as np
@@ -8,9 +15,9 @@ from research.algos.base import BaseAlgo, AlgoSignal
 
 class MACDMomentumAlgo(BaseAlgo):
     """
-    MACD histogram crosses zero from extreme:
-      Long:  histogram was negative (< -threshold), flips positive this bar.
-      Short: histogram was positive (> +threshold), flips negative.
+    MACD histogram crosses zero from extreme, aligned with H1 EMA trend:
+      Long:  histogram was negative (< -threshold), flips positive, H1 close > H1 EMA.
+      Short: histogram was positive (> +threshold), flips negative, H1 close < H1 EMA.
     SL: 1.5× ATR.  TP: 2.5× ATR.
     """
     name = "macd_momentum"
@@ -18,15 +25,17 @@ class MACDMomentumAlgo(BaseAlgo):
     def __init__(
         self,
         fast: int = 12, slow: int = 26, signal: int = 9,
-        hist_threshold: float = 0.0,   # 0 = any crossing
+        hist_threshold: float = 0.0,   # min |histogram| before crossing (0 = any)
         sl_mult: float = 1.5, tp_mult: float = 2.5,
+        h1_ema_period: int = 50,       # H1 EMA period for trend filter
     ):
-        self.fast      = fast
-        self.slow      = slow
-        self.signal    = signal
-        self.threshold = hist_threshold
-        self.sl_mult   = sl_mult
-        self.tp_mult   = tp_mult
+        self.fast          = fast
+        self.slow          = slow
+        self.signal        = signal
+        self.threshold     = hist_threshold
+        self.sl_mult       = sl_mult
+        self.tp_mult       = tp_mult
+        self.h1_ema_period = h1_ema_period
 
     def generate(self, m15_df: pd.DataFrame, h1_df: pd.DataFrame, idx: int) -> Optional[AlgoSignal]:
         if idx < self.slow + self.signal + 5:
@@ -45,9 +54,22 @@ class MACDMomentumAlgo(BaseAlgo):
         if np.isnan(h_curr) or atr_val <= 0:
             return None
 
-        if h_prev < -self.threshold and h_curr > 0:
+        # --- H1 trend filter ---
+        # Require at least enough H1 bars to compute the EMA
+        if h1_df is not None and len(h1_df) >= self.h1_ema_period:
+            h1_close = h1_df["close"].astype(float)
+            h1_ema   = float(self.ema(h1_close, self.h1_ema_period).iloc[-1])
+            h1_price = float(h1_close.iloc[-1])
+            h1_bullish = h1_price > h1_ema
+            h1_bearish = h1_price < h1_ema
+        else:
+            # Not enough H1 data — skip trend filter
+            h1_bullish = h1_bearish = True
+
+        # --- MACD crossing with minimum extreme ---
+        if h_prev < -self.threshold and h_curr > 0 and h1_bullish:
             direction = "long"
-        elif h_prev > self.threshold and h_curr < 0:
+        elif h_prev > self.threshold and h_curr < 0 and h1_bearish:
             direction = "short"
         else:
             return None
