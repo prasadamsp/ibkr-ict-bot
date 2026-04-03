@@ -35,6 +35,10 @@ def _make_router(strategy_cfg, risk_cfg, adaptive: bool, router_type: str = "ict
     if router_type == "research":
         from strategy.research_router import ResearchRouter
         return ResearchRouter(strategy_cfg, risk_cfg)
+    # Dashboard router — replicates Gold Bias Dashboard ICT signals (XAUUSD-only)
+    if router_type == "dashboard":
+        from strategy.dashboard_router import DashboardRouter
+        return DashboardRouter(strategy_cfg, risk_cfg)
     # ICT adaptive router
     if adaptive:
         try:
@@ -78,8 +82,8 @@ async def run_live(symbols: list[str], paper: bool = True, adaptive: bool = Fals
     # ── Shared components ────────────────────────────────────────────────────
     data_handler = DataHandler()
     risk_manager = RiskManager()
-    # Research router uses separate log files to enable side-by-side comparison
-    _sfx = "_research" if router_type == "research" else ""
+    # Each router uses separate log files for side-by-side comparison
+    _sfx = f"_{router_type}" if router_type not in ("ict",) else ""
     _trade_log  = CONFIG.logging.trade_log_file.replace(".csv",  f"{_sfx}.csv")
     _signal_log = CONFIG.logging.signal_log_file.replace(".csv", f"{_sfx}.csv")
     trade_logger = TradeLogger(_trade_log, _signal_log)
@@ -413,7 +417,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--router",
-        choices=["ict", "research"],
+        choices=["ict", "research", "dashboard"],
         default="ict",
         help=(
             "Signal router to use. "

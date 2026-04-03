@@ -166,10 +166,15 @@ class ResearchRouter:
             _log.info("ResearchRouter: %s NEWS BLACKOUT — %s", sym, reason)
             return None
 
-        # 2. Macro gate — same rules as ICT system
-        if not macro_allows_signal(sym, "long", current_dt, h1_df, eurusd_h1=self._get_eurusd(sym, h1_df)):
+        # 2. Macro gate — allow_counter_carry=True because research algos have
+        # trend-alignment built in (H1 EMA, EMA200 pullback, etc.).  The carry
+        # penalty is applied as a confluence delta (step 5) rather than a hard block.
+        eurusd_h1 = self._get_eurusd(sym, h1_df)
+        if not macro_allows_signal(sym, "long", current_dt, h1_df,
+                                   eurusd_h1=eurusd_h1, allow_counter_carry=True):
             # Check short direction too before blocking entirely
-            if not macro_allows_signal(sym, "short", current_dt, h1_df, eurusd_h1=self._get_eurusd(sym, h1_df)):
+            if not macro_allows_signal(sym, "short", current_dt, h1_df,
+                                       eurusd_h1=eurusd_h1, allow_counter_carry=True):
                 _log.debug("ResearchRouter: %s macro blocked both directions", sym)
                 return None
 
@@ -191,10 +196,10 @@ class ResearchRouter:
             _log.debug("ResearchRouter: %s → no signal", sym)
             return None
 
-        # 4. Macro direction gate — now we know the direction, re-check
+        # 4. Macro direction gate — allow_counter_carry=True (same rationale as step 2)
         direction_str = algo_signal.direction  # "long" or "short"
         if not macro_allows_signal(sym, direction_str, current_dt, h1_df,
-                                   eurusd_h1=self._get_eurusd(sym, h1_df)):
+                                   eurusd_h1=eurusd_h1, allow_counter_carry=True):
             _log.debug("ResearchRouter: %s macro blocked direction=%s", sym, direction_str)
             return None
 

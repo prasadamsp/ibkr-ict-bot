@@ -614,8 +614,35 @@ class DataHandler:
 
         return handler
 
+    # Sanity ranges for price data — reject bars outside these bounds.
+    # Twelve Data occasionally returns stale/wrong prices for commodity feeds.
+    _PRICE_SANITY: Dict[str, tuple] = {
+        "OIL":    (30.0,  160.0),   # WTI crude: $30–$160 realistic range
+        "XAUUSD": (1000.0, 4000.0), # Gold: $1000–$4000
+        "XAGUSD": (10.0,  100.0),   # Silver: $10–$100
+        "BTC":    (5000.0, 500_000.0),
+    }
+
     def _store(self, symbol: str, tf: str, df: pd.DataFrame) -> None:
         """Merge new bars into storage, deduplicate, keep sorted."""
+        # Price sanity check — drop rows with wildly wrong prices
+        if symbol in self._PRICE_SANITY and not df.empty and "close" in df.columns:
+            lo, hi = self._PRICE_SANITY[symbol]
+            bad = df[(df["close"] < lo) | (df["close"] > hi)]
+            if not bad.empty:
+                data_log.warning(
+                    f"[{symbol} {tf}] Rejecting {len(bad)} bar(s) with out-of-range "
+                    f"close prices (expected {lo}–{hi}): "
+                    f"{bad['close'].tolist()[:5]}"
+                )
+                df = df[(df["close"] >= lo) & (df["close"] <= hi)]
+            if df.empty:
+                data_log.error(
+                    f"[{symbol} {tf}] ALL bars rejected — feed returning garbage prices. "
+                    f"Check Twelve Data ticker mapping for {symbol}."
+                )
+                return
+
         if symbol not in self._bars:
             self._bars[symbol] = {}
 

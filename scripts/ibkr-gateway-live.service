@@ -1,0 +1,23 @@
+[Unit]
+Description=IB Gateway LIVE (managed by IBC)
+After=network-online.target ibkr-gateway.service
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=DISPLAY=:98
+ExecStartPre=/bin/bash /opt/ibc_live/start_xvfb.sh
+ExecStart=/bin/bash /opt/ibc_live/gatewaystart.sh -inline -g /opt/ibgateway /opt/ibc_live /opt/ibc_live/config.ini live 4001
+ExecStop=/bin/bash /opt/ibc_live/stop.sh
+TimeoutStartSec=180
+TimeoutStopSec=60
+Restart=no
+StandardOutput=append:/opt/trading/IBKR/logs/gateway_live.log
+StandardError=append:/opt/trading/IBKR/logs/gateway_live.log
+
+[Install]
+WantedBy=multi-user.target

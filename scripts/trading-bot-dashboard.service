@@ -1,0 +1,68 @@
+# /etc/systemd/system/trading-bot-dashboard.service
+#
+# IBKR Paper Bot — Dashboard Signal Replica (clientId=3)
+#
+# Replicates the signal logic of the Gold Weekly Bias Dashboard:
+#   https://tradinginvesting-6ltxxnck9m2gfj2i473ntd.streamlit.app/
+#
+# Runs XAUUSD-only on the paper account (port 4002).
+# Generates ICT trade ideas once per day at London open (08:00 UTC):
+#   Trade 1 — Primary Trend (Order Block)
+#   Trade 2 — OTE Retracement (Fib 0.618–0.705)
+#   Trade 3 — Liquidity Hunt (PWH/PWL sweep)
+#
+# Bias score: Technical (MAs, RSI, MACD) + Cross-Asset (DXY, SPX, EURUSD, VIX)
+# Min RR: 1.5:1 | Min confidence: MEDIUM
+#
+# Deploy:
+#   sudo cp scripts/trading-bot-dashboard.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable trading-bot-dashboard
+#   sudo systemctl start trading-bot-dashboard
+#
+# Compare logs:
+#   /opt/trading/IBKR/logs/system_dashboard.log
+#   /opt/trading/IBKR/logs/trades_dashboard.csv
+
+[Unit]
+Description=ICT Trading Bot — Dashboard Signal Replica (XAUUSD, clientId=3)
+After=network-online.target ibkr-gateway.service
+Wants=network-online.target
+Requires=ibkr-gateway.service
+
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/opt/trading/IBKR
+
+# Dashboard router: XAUUSD-only, uses Gold Bias Dashboard ICT logic
+ExecStart=/opt/trading/IBKR/.venv/bin/python main.py \
+    --mode paper \
+    --port 4002 \
+    --symbols XAUUSD \
+    --router dashboard \
+    --client-id 3
+
+# Risk settings — conservative (same as main bot, paper money)
+Environment=RISK_PER_TRADE=0.005
+Environment=MAX_DAILY_LOSS=0.02
+Environment=MIN_RR_RATIO=1.5
+Environment=KILL_SWITCH_DRAWDOWN=0.05
+Environment=MAX_CONCURRENT_TRADES=1
+Environment=KILL_SWITCH_LOSSES=3
+
+# Restart on crash — not on clean exit (IBKR maintenance)
+Restart=on-failure
+RestartSec=60
+StartLimitBurst=5
+StartLimitInterval=300
+
+# Memory cap
+MemoryMax=512M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-bot-dashboard
+
+[Install]
+WantedBy=multi-user.target

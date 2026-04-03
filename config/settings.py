@@ -377,6 +377,12 @@ def _apply_env_overrides(cfg: Config) -> None:
         cfg.risk.max_daily_loss = float(v)
     if v := os.getenv("MIN_RR_RATIO"):
         cfg.risk.min_rr_ratio = float(v)
+    if v := os.getenv("KILL_SWITCH_DRAWDOWN"):
+        cfg.risk.kill_switch_drawdown = float(v)
+    if v := os.getenv("MAX_CONCURRENT_TRADES"):
+        cfg.risk.max_concurrent_trades = int(v)
+    if v := os.getenv("KILL_SWITCH_LOSSES"):
+        cfg.risk.kill_switch_consecutive_losses = int(v)
 
     # Strategy
     if v := os.getenv("MIN_CONFLUENCE_SCORE"):

@@ -1,0 +1,54 @@
+[Unit]
+Description=ICT Trading Bot — LIVE (Week 1: EURUSD + GBPUSD only, ultra-cautious)
+Documentation=https://github.com/your-repo/IBKR
+After=network-online.target ibkr-gateway-live.service
+Wants=ibkr-gateway-live.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trading/IBKR
+
+# WEEK 1 LIVE — ultra-cautious parameters
+# Risk: 0.2% per trade (~€20 on €10k), max 1% daily loss (~€100)
+# Instruments: EURUSD + GBPUSD only (most liquid, tightest spreads)
+# Max 1 concurrent position, min RR 2.0 (stricter than paper)
+ExecStart=/opt/trading/IBKR/.venv/bin/python main.py \
+    --mode live \
+    --port 4001 \
+    --symbols EURUSD,GBPUSD \
+    --adaptive
+
+ExecStartPre=/bin/sleep 60
+
+# Risk overrides — MUST be conservative for Week 1
+Environment=PYTHONUNBUFFERED=1
+Environment=RISK_PER_TRADE=0.002
+Environment=MAX_DAILY_LOSS=0.01
+Environment=MIN_RR_RATIO=2.0
+Environment=MIN_CONFLUENCE_SCORE=0.55
+Environment=ENTRY_TYPE=limit
+Environment=KILL_SWITCH_DRAWDOWN=0.02
+Environment=MAX_CONCURRENT_TRADES=1
+Environment=KILL_SWITCH_LOSSES=3
+EnvironmentFile=-/opt/trading/IBKR/.env
+
+# Restart policy — conservative: only 3 attempts in 10 min
+Restart=on-failure
+RestartSec=60
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+# Logging — separate live log file
+StandardOutput=append:/opt/trading/IBKR/logs/system_live.log
+StandardError=append:/opt/trading/IBKR/logs/system_live.log
+
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
