@@ -5,13 +5,13 @@
 # Replicates the signal logic of the Gold Weekly Bias Dashboard:
 #   https://tradinginvesting-6ltxxnck9m2gfj2i473ntd.streamlit.app/
 #
-# Runs XAUUSD-only on the paper account (port 4002).
-# Generates ICT trade ideas once per day at London open (08:00 UTC):
+# Runs all 8 instruments on the paper account (port 4002).
+# Generates ICT trade ideas once per instrument per day at London open (08:00 UTC):
 #   Trade 1 — Primary Trend (Order Block)
 #   Trade 2 — OTE Retracement (Fib 0.618–0.705)
 #   Trade 3 — Liquidity Hunt (PWH/PWL sweep)
 #
-# Bias score: Technical (MAs, RSI, MACD) + Cross-Asset (DXY, SPX, EURUSD, VIX)
+# Per-instrument bias score: Technical (MAs, RSI, MACD) + Cross-Asset (instrument-specific)
 # Min RR: 1.5:1 | Min confidence: MEDIUM
 #
 # Deploy:
@@ -20,12 +20,13 @@
 #   sudo systemctl enable trading-bot-dashboard
 #   sudo systemctl start trading-bot-dashboard
 #
-# Compare logs:
-#   /opt/trading/IBKR/logs/system_dashboard.log
+# Logs:
+#   journalctl -u trading-bot-dashboard -f
 #   /opt/trading/IBKR/logs/trades_dashboard.csv
+#   /opt/trading/IBKR/logs/signals_dashboard.csv
 
 [Unit]
-Description=ICT Trading Bot — Dashboard Signal Replica (XAUUSD, clientId=3)
+Description=ICT Trading Bot — Dashboard Signal Replica (8 instruments, clientId=3)
 After=network-online.target ibkr-gateway.service
 Wants=network-online.target
 Requires=ibkr-gateway.service
@@ -35,20 +36,20 @@ Type=simple
 User=trader
 WorkingDirectory=/opt/trading/IBKR
 
-# Dashboard router: XAUUSD-only, uses Gold Bias Dashboard ICT logic
+# Dashboard router: all 8 instruments, Gold Bias Dashboard ICT logic per instrument
 ExecStart=/opt/trading/IBKR/.venv/bin/python main.py \
     --mode paper \
     --port 4002 \
-    --symbols XAUUSD \
+    --symbols XAUUSD,XAGUSD,EURUSD,NAS100,GBPUSD,GBPJPY,BTC,OIL \
     --router dashboard \
     --client-id 3
 
-# Risk settings — conservative (same as main bot, paper money)
+# Risk settings — conservative: 0.5% per trade, max 3 concurrent
 Environment=RISK_PER_TRADE=0.005
 Environment=MAX_DAILY_LOSS=0.02
 Environment=MIN_RR_RATIO=1.5
 Environment=KILL_SWITCH_DRAWDOWN=0.05
-Environment=MAX_CONCURRENT_TRADES=1
+Environment=MAX_CONCURRENT_TRADES=3
 Environment=KILL_SWITCH_LOSSES=3
 
 # Restart on crash — not on clean exit (IBKR maintenance)
@@ -57,8 +58,8 @@ RestartSec=60
 StartLimitBurst=5
 StartLimitInterval=300
 
-# Memory cap
-MemoryMax=512M
+# Memory cap — increased for 8-instrument yfinance data fetches
+MemoryMax=768M
 
 StandardOutput=journal
 StandardError=journal

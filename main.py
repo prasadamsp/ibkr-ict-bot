@@ -181,24 +181,32 @@ async def run_live(symbols: list[str], paper: bool = True, adaptive: bool = Fals
 
     # ── Dashboard router: background tick (bypasses M15 bar requirement) ──────
     # DashboardRouter uses yfinance — it doesn't need IBKR M15 bars.
-    # Poll every 30s; route() fires _refresh_signal() once at 08:00 UTC.
+    # Poll every 30s; route() fires _refresh_signal() once per symbol at 08:00 UTC.
     if router_type == "dashboard":
+        _dashboard_symbols = router.symbols() if hasattr(router, "symbols") else symbols
         async def _dashboard_tick_loop():
             while True:
                 await asyncio.sleep(30)
-                now_utc = datetime.now(timezone.utc)
+                now_utc  = datetime.now(timezone.utc)
                 open_pos = list(execution.active_trades.values())
-                sig = router.route("XAUUSD", None, None, now_utc, open_pos, {})
-                if sig:
-                    system_log.info(
-                        f"▶ Dashboard Signal [XAUUSD] {sig.direction.upper()}  "
-                        f"entry={sig.entry_price:.5f}  sl={sig.stop_loss:.5f}  "
-                        f"tp={sig.take_profit:.5f}  RR={sig.rr_ratio:.1f}  "
-                        f"score={sig.confluence_score:.2f}"
-                    )
-                    asyncio.ensure_future(execution.execute(sig))
+                for _sym in _dashboard_symbols:
+                    # Only call route() for symbols being traded in this instance
+                    if _sym not in [s.upper() for s in symbols]:
+                        continue
+                    sig = router.route(_sym, None, None, now_utc, open_pos, {})
+                    if sig:
+                        system_log.info(
+                            f"▶ Dashboard Signal [{_sym}] {sig.direction.upper()}  "
+                            f"entry={sig.entry_price:.5f}  sl={sig.stop_loss:.5f}  "
+                            f"tp={sig.take_profit:.5f}  RR={sig.rr_ratio:.1f}  "
+                            f"score={sig.confluence_score:.2f}"
+                        )
+                        asyncio.ensure_future(execution.execute(sig))
         asyncio.ensure_future(_dashboard_tick_loop())
-        system_log.info("DashboardRouter: background tick task started (fires at 08:00 UTC daily)")
+        system_log.info(
+            "DashboardRouter: background tick started — %d symbols, fires at 08:00 UTC daily",
+            len([s for s in _dashboard_symbols if s in [x.upper() for x in symbols]])
+        )
 
     # ── Keep-alive loop ───────────────────────────────────────────────────────
     try:

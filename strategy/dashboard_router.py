@@ -78,12 +78,40 @@ _MIN_RR = 1.5
 # London open — time to refresh daily signals
 _LONDON_OPEN_HOUR = 8   # 08:00 UTC
 
-# yfinance tickers
-_GOLD_TICKER  = "GC=F"
+# ---------------------------------------------------------------------------
+# Per-instrument yfinance ticker map
+# ---------------------------------------------------------------------------
+_INSTRUMENT_TICKERS: Dict[str, str] = {
+    "XAUUSD": "GC=F",       # Gold futures (continuous)
+    "XAGUSD": "SI=F",       # Silver futures (continuous)
+    "EURUSD": "EURUSD=X",   # EUR/USD spot
+    "NAS100": "QQQ",        # Nasdaq-100 ETF (best weekly data)
+    "GBPUSD": "GBPUSD=X",   # GBP/USD spot
+    "GBPJPY": "GBPJPY=X",   # GBP/JPY cross
+    "BTC":    "BTC-USD",    # Bitcoin spot
+    "OIL":    "CL=F",       # WTI Crude futures (continuous)
+}
+
+# Cross-asset tickers shared by multiple instruments
 _DXY_TICKER   = "DX-Y.NYB"
 _SPX_TICKER   = "^GSPC"
-_EURUSD_TICKER= "EURUSD=X"
 _VIX_TICKER   = "^VIX"
+_EURUSD_TICKER = "EURUSD=X"
+_USDJPY_TICKER = "JPY=X"
+_GBPUSD_TICKER = "GBPUSD=X"
+_GOLD_TICKER   = "GC=F"
+
+# Cross-asset tickers to fetch per instrument
+_INSTRUMENT_CROSS_TICKERS: Dict[str, Dict[str, str]] = {
+    "XAUUSD": {"dxy": _DXY_TICKER, "spx": _SPX_TICKER, "eurusd": _EURUSD_TICKER, "vix": _VIX_TICKER},
+    "XAGUSD": {"gold": _GOLD_TICKER, "dxy": _DXY_TICKER, "spx": _SPX_TICKER, "vix": _VIX_TICKER},
+    "EURUSD": {"dxy": _DXY_TICKER, "spx": _SPX_TICKER, "vix": _VIX_TICKER, "usdjpy": _USDJPY_TICKER},
+    "NAS100": {"spx": _SPX_TICKER, "vix": _VIX_TICKER, "dxy": _DXY_TICKER},
+    "GBPUSD": {"dxy": _DXY_TICKER, "eurusd": _EURUSD_TICKER, "vix": _VIX_TICKER},
+    "GBPJPY": {"spx": _SPX_TICKER, "vix": _VIX_TICKER, "gbpusd": _GBPUSD_TICKER, "usdjpy": _USDJPY_TICKER},
+    "BTC":    {"spx": _SPX_TICKER, "dxy": _DXY_TICKER, "vix": _VIX_TICKER},
+    "OIL":    {"dxy": _DXY_TICKER, "spx": _SPX_TICKER, "vix": _VIX_TICKER, "gold": _GOLD_TICKER},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -545,106 +573,186 @@ def _generate_ict_trades(monthly_df: pd.DataFrame, weekly_df: pd.DataFrame,
 # Simplified Bias Score (price-only — no FRED/COT needed)
 # ---------------------------------------------------------------------------
 
-def _compute_bias_score(weekly_gold: pd.DataFrame, cross_df: Dict[str, pd.DataFrame]) -> float:
-    """
-    Simplified bias score [-1, +1] using price-only indicators.
-    Technical 50% + Cross-Asset 50%.
-    """
-    score = 0.0
-
-    if weekly_gold.empty or len(weekly_gold) < 5:
+def _chg(df: pd.DataFrame) -> float:
+    """Weekly % change from second-to-last to last close. Returns 0.0 on error."""
+    try:
+        c = df["Close"]
+        prev = float(c.iloc[-2])
+        return (float(c.iloc[-1]) - prev) / prev if prev else 0.0
+    except Exception:
         return 0.0
 
-    close = weekly_gold["Close"]
-    cp = float(close.iloc[-1])
-    prev_cp = float(close.iloc[-2])
-    weekly_chg = (cp - prev_cp) / prev_cp if prev_cp else 0.0
 
-    # Technical: MAs
+def _score_technical(weekly_df: pd.DataFrame) -> float:
+    """Generic technical score [-0.5, +0.5]: MAs 0.40, RSI 0.05, MACD 0.05."""
+    if weekly_df.empty or len(weekly_df) < 5:
+        return 0.0
+    score = 0.0
+    close = weekly_df["Close"]
+    cp = float(close.iloc[-1])
     for period, weight in [(20, 0.15), (50, 0.15), (200, 0.10)]:
         if len(close) >= period:
-            ma = float(close.tail(period).mean())
-            score += weight * (1.0 if cp > ma else -1.0)
-
-    # Technical: RSI(14 weeks)
+            score += weight * (1.0 if cp > float(close.tail(period).mean()) else -1.0)
     if len(close) >= 15:
         delta = close.diff().dropna()
         gain = delta.clip(lower=0).tail(14).mean()
         loss = (-delta.clip(upper=0)).tail(14).mean()
         if loss > 0:
             rsi = 100 - (100 / (1 + gain / loss))
-            if 50 <= rsi <= 70:
-                score += 0.05
-            elif rsi > 75:
-                score -= 0.05
-
-    # Technical: MACD(12,26) weekly
+            score += 0.05 if 50 <= rsi <= 70 else (-0.05 if rsi > 75 else 0.0)
     if len(close) >= 30:
         ema12 = float(close.ewm(span=12, adjust=False).mean().iloc[-1])
         ema26 = float(close.ewm(span=26, adjust=False).mean().iloc[-1])
         score += 0.05 * (1.0 if ema12 > ema26 else -1.0)
+    return score
 
-    # Cross-asset: DXY (falling DXY = bullish gold)
-    dxy_df = cross_df.get("dxy")
-    if dxy_df is not None and len(dxy_df) >= 2:
-        dxy_chg = (float(dxy_df["Close"].iloc[-1]) - float(dxy_df["Close"].iloc[-2])) / float(dxy_df["Close"].iloc[-2])
+
+def _score_cross_asset(symbol: str, cross_df: Dict[str, pd.DataFrame]) -> float:
+    """
+    Per-instrument cross-asset score [-0.5, +0.5].
+    Relationships are directional — rising/falling cross-asset moves add/subtract.
+    """
+    sym = symbol.upper()
+    score = 0.0
+
+    def _safe_chg(key: str) -> float:
+        df = cross_df.get(key)
+        return _chg(df) if df is not None and len(df) >= 2 else 0.0
+
+    def _safe_val(key: str) -> float:
+        try:
+            return float(cross_df[key]["Close"].iloc[-1])
+        except Exception:
+            return 0.0
+
+    dxy_chg   = _safe_chg("dxy")
+    spx_chg   = _safe_chg("spx")
+    vix_val   = _safe_val("vix")
+    vix_chg   = _safe_chg("vix") * vix_val   # absolute change approximation
+    eur_chg   = _safe_chg("eurusd")
+    usdjpy_chg = _safe_chg("usdjpy")
+    gbpusd_chg = _safe_chg("gbpusd")
+    gold_chg  = _safe_chg("gold")
+
+    if sym == "XAUUSD":
+        # Falling DXY = bullish gold
         score += 0.15 * (-1.0 if dxy_chg > 0 else 1.0)
-
-    # Cross-asset: SPX (falling SPX = bullish gold)
-    spx_df = cross_df.get("spx")
-    if spx_df is not None and len(spx_df) >= 2:
-        spx_chg = (float(spx_df["Close"].iloc[-1]) - float(spx_df["Close"].iloc[-2])) / float(spx_df["Close"].iloc[-2])
-        if spx_chg < -0.02:
-            score += 0.10
-        elif spx_chg > 0.02:
-            score -= 0.10
-
-    # Cross-asset: EURUSD (rising = weak USD = bullish gold)
-    eur_df = cross_df.get("eurusd")
-    if eur_df is not None and len(eur_df) >= 2:
-        eur_chg = (float(eur_df["Close"].iloc[-1]) - float(eur_df["Close"].iloc[-2])) / float(eur_df["Close"].iloc[-2])
+        # Falling SPX = flight-to-safety bid
+        score += 0.10 * (-1.0 if spx_chg > 0.02 else (1.0 if spx_chg < -0.02 else 0.0))
+        # Rising EUR = weak USD = bullish gold
         if abs(eur_chg) > 0.003:
             score += 0.10 * (1.0 if eur_chg > 0 else -1.0)
-
-    # Cross-asset: VIX (high or rising = risk-off = bullish gold)
-    vix_df = cross_df.get("vix")
-    if vix_df is not None and len(vix_df) >= 2:
-        vix_val = float(vix_df["Close"].iloc[-1])
-        vix_chg = float(vix_df["Close"].iloc[-1]) - float(vix_df["Close"].iloc[-2])
+        # VIX spike = risk-off = safe-haven bid
         if vix_val > 25 or vix_chg > 3:
             score += 0.05
         elif vix_val < 15 and vix_chg < -3:
             score -= 0.05
 
-    return round(max(-1.0, min(1.0, score)), 4)
+    elif sym == "XAGUSD":
+        # Gold direction is strongest driver (corr ~0.85)
+        score += 0.15 * (1.0 if gold_chg > 0 else -1.0)
+        # DXY inverse
+        score += 0.10 * (-1.0 if dxy_chg > 0 else 1.0)
+        # SPX rising = industrial demand bullish
+        score += 0.10 * (1.0 if spx_chg > 0.01 else (-1.0 if spx_chg < -0.02 else 0.0))
+        # VIX spike = risk-off hurts industrial demand
+        if vix_val > 25:
+            score -= 0.05
+        elif vix_val < 15:
+            score += 0.05
+
+    elif sym == "EURUSD":
+        # DXY direct inverse (strongest driver)
+        score += 0.20 * (-1.0 if dxy_chg > 0 else 1.0)
+        # Risk-on = sell USD = bullish EUR/USD
+        score += 0.10 * (1.0 if spx_chg > 0.01 else (-1.0 if spx_chg < -0.02 else 0.0))
+        # VIX spike = flight to USD = bearish EUR/USD
+        score += 0.10 * (-1.0 if vix_val > 25 else (1.0 if vix_val < 15 else 0.0))
+        # USDJPY rising = broad USD strength = bearish EUR/USD
+        score += 0.10 * (-1.0 if usdjpy_chg > 0.003 else (1.0 if usdjpy_chg < -0.003 else 0.0))
+
+    elif sym == "NAS100":
+        # SPX direction is the dominant driver (corr ~0.95)
+        score += 0.15 * (1.0 if spx_chg > 0 else -1.0)
+        # VIX = risk-off destroys NAS
+        score += 0.15 * (-1.0 if vix_val > 20 else (1.0 if vix_val < 15 else 0.0))
+        # DXY: weak USD = risk-on / growth bias = mildly bullish tech
+        score += 0.10 * (-1.0 if dxy_chg > 0.005 else (1.0 if dxy_chg < -0.005 else 0.0))
+
+    elif sym == "GBPUSD":
+        # DXY inverse
+        score += 0.15 * (-1.0 if dxy_chg > 0 else 1.0)
+        # EUR/USD correlated — GBP follows EUR direction
+        if abs(eur_chg) > 0.002:
+            score += 0.15 * (1.0 if eur_chg > 0 else -1.0)
+        # VIX: risk-off = sell GBP (risk currency vs USD)
+        score += 0.10 * (-1.0 if vix_val > 25 else (1.0 if vix_val < 15 else 0.0))
+
+    elif sym == "GBPJPY":
+        # SPX: risk-on = sell JPY = bullish GBP/JPY
+        score += 0.15 * (1.0 if spx_chg > 0.01 else (-1.0 if spx_chg < -0.02 else 0.0))
+        # VIX: risk-off = buy JPY = bearish GBP/JPY
+        score += 0.15 * (-1.0 if vix_val > 25 else (1.0 if vix_val < 15 else 0.0))
+        # GBP/USD direction adds GBP-side impulse
+        if abs(gbpusd_chg) > 0.002:
+            score += 0.10 * (1.0 if gbpusd_chg > 0 else -1.0)
+        # USD/JPY rising = JPY weak = bullish GBP/JPY
+        if abs(usdjpy_chg) > 0.003:
+            score += 0.10 * (1.0 if usdjpy_chg > 0 else -1.0)
+
+    elif sym == "BTC":
+        # SPX: risk-on = bullish crypto (corr ~0.60)
+        score += 0.15 * (1.0 if spx_chg > 0.01 else (-1.0 if spx_chg < -0.02 else 0.0))
+        # DXY: weak USD = anti-dollar bid = bullish BTC
+        score += 0.15 * (-1.0 if dxy_chg > 0 else 1.0)
+        # VIX: risk-off = sell crypto
+        score += 0.10 * (-1.0 if vix_val > 25 else (1.0 if vix_val < 15 else 0.0))
+
+    elif sym == "OIL":
+        # DXY inverse (oil priced in USD)
+        score += 0.15 * (-1.0 if dxy_chg > 0 else 1.0)
+        # SPX: economic activity = demand
+        score += 0.10 * (1.0 if spx_chg > 0.01 else (-1.0 if spx_chg < -0.02 else 0.0))
+        # VIX: demand fears
+        score += 0.10 * (-1.0 if vix_val > 25 else (1.0 if vix_val < 15 else 0.0))
+        # Gold rising = inflation narrative = bullish OIL
+        if abs(gold_chg) > 0.005:
+            score += 0.05 * (1.0 if gold_chg > 0 else -1.0)
+
+    return score
+
+
+def _compute_bias_score(symbol: str, weekly_df: pd.DataFrame, cross_df: Dict[str, pd.DataFrame]) -> float:
+    """
+    Multi-instrument bias score [-1, +1].
+    Technical 50% (generic) + Cross-Asset 50% (per-instrument).
+    """
+    tech  = _score_technical(weekly_df)
+    cross = _score_cross_asset(symbol, cross_df)
+    return round(max(-1.0, min(1.0, tech + cross)), 4)
 
 
 # ---------------------------------------------------------------------------
 # Data Fetcher
 # ---------------------------------------------------------------------------
 
-def _fetch_xauusd_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Fetch Monthly, Weekly, Daily XAUUSD from yfinance."""
-    monthly = yf.download(_GOLD_TICKER, period="10y", interval="1mo", progress=False, auto_adjust=True)
-    weekly  = yf.download(_GOLD_TICKER, period="5y",  interval="1wk", progress=False, auto_adjust=True)
-    daily   = yf.download(_GOLD_TICKER, period="90d", interval="1d",  progress=False, auto_adjust=True)
-
-    # Flatten MultiIndex columns if present
+def _fetch_instrument_data(symbol: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Fetch Monthly, Weekly, Daily OHLCV from yfinance for any supported instrument."""
+    ticker = _INSTRUMENT_TICKERS.get(symbol.upper())
+    if not ticker:
+        raise ValueError(f"No yfinance ticker configured for {symbol}")
+    monthly = yf.download(ticker, period="10y", interval="1mo", progress=False, auto_adjust=True)
+    weekly  = yf.download(ticker, period="5y",  interval="1wk", progress=False, auto_adjust=True)
+    daily   = yf.download(ticker, period="90d", interval="1d",  progress=False, auto_adjust=True)
     for df in [monthly, weekly, daily]:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-
     return monthly, weekly, daily
 
 
-def _fetch_cross_data() -> Dict[str, pd.DataFrame]:
-    """Fetch DXY, SPX, EURUSD, VIX (weekly) for bias scoring."""
-    tickers = {
-        "dxy":   _DXY_TICKER,
-        "spx":   _SPX_TICKER,
-        "eurusd":_EURUSD_TICKER,
-        "vix":   _VIX_TICKER,
-    }
+def _fetch_cross_data_for(symbol: str) -> Dict[str, pd.DataFrame]:
+    """Fetch relevant cross-asset tickers (weekly) for the given instrument."""
+    tickers = _INSTRUMENT_CROSS_TICKERS.get(symbol.upper(), {})
     result: Dict[str, pd.DataFrame] = {}
     for key, ticker in tickers.items():
         try:
@@ -653,7 +761,7 @@ def _fetch_cross_data() -> Dict[str, pd.DataFrame]:
                 df.columns = df.columns.get_level_values(0)
             result[key] = df
         except Exception as e:
-            _log.debug("DashboardRouter: cross-asset fetch failed for %s: %s", ticker, e)
+            _log.debug("DashboardRouter: cross-asset fetch failed for %s (%s): %s", key, ticker, e)
     return result
 
 
@@ -663,25 +771,33 @@ def _fetch_cross_data() -> Dict[str, pd.DataFrame]:
 
 class DashboardRouter:
     """
-    XAUUSD-only router that replicates the Gold Bias Dashboard signal logic.
+    Multi-instrument router replicating the Gold Bias Dashboard ICT signal logic.
 
-    Public interface matches StrategyRouter / ResearchRouter — same route() signature.
-    Only responds to symbol='XAUUSD'. Returns None for all other symbols.
+    Supports: XAUUSD, XAGUSD, EURUSD, NAS100, GBPUSD, GBPJPY, BTC, OIL.
+    Each instrument gets an independent per-day signal cache.
+    Public interface matches StrategyRouter / ResearchRouter.
     """
+
+    _SUPPORTED = set(_INSTRUMENT_TICKERS.keys())
 
     def __init__(self, strategy_cfg=None, risk_cfg=None) -> None:
         self._strategy_cfg = strategy_cfg
         self._risk_cfg = risk_cfg
 
-        # Daily signal cache
-        self._signal_date: Optional[date] = None
-        self._pending_signal: Optional[TradeSignal] = None
-        self._signal_emitted: bool = False
+        # Per-symbol daily signal cache: symbol -> {date, signal, emitted}
+        self._cache: Dict[str, dict] = {
+            sym: {"date": None, "signal": None, "emitted": False}
+            for sym in self._SUPPORTED
+        }
 
-        _log.info("DashboardRouter initialised — XAUUSD ICT Daily (Gold Bias Dashboard replica)")
+        _log.info(
+            "DashboardRouter initialised — %d instruments: %s",
+            len(self._SUPPORTED),
+            ", ".join(sorted(self._SUPPORTED)),
+        )
 
     def symbols(self) -> List[str]:
-        return ["XAUUSD"]
+        return sorted(self._SUPPORTED)
 
     def route(
         self,
@@ -693,28 +809,28 @@ class DashboardRouter:
         extra_data=None,
         d1_df=None,
     ) -> Optional[TradeSignal]:
-        if symbol.upper().strip() != "XAUUSD":
+        sym = symbol.upper().strip()
+        if sym not in self._SUPPORTED:
             return None
 
         now_utc = current_dt.astimezone(timezone.utc) if current_dt.tzinfo else current_dt.replace(tzinfo=timezone.utc)
         today   = now_utc.date()
+        cache   = self._cache[sym]
 
         # Refresh signal once per day at / after London open
-        if (self._signal_date != today and now_utc.hour >= _LONDON_OPEN_HOUR):
-            self._refresh_signal(today)
-            self._signal_emitted = False
+        if cache["date"] != today and now_utc.hour >= _LONDON_OPEN_HOUR:
+            self._refresh_signal(sym, today)
 
-        # Emit the signal once (then clear — don't repeat on every bar)
-        if self._pending_signal and not self._signal_emitted:
-            self._signal_emitted = True
+        # Emit pending signal once per day
+        if cache["signal"] and not cache["emitted"]:
+            cache["emitted"] = True
+            sig = cache["signal"]
             _log.info(
-                "DashboardRouter: SIGNAL [XAUUSD] %s Entry=%.2f SL=%.2f TP=%.2f",
-                self._pending_signal.direction.upper(),
-                self._pending_signal.entry_price,
-                self._pending_signal.stop_loss,
-                self._pending_signal.take_profit,
+                "DashboardRouter: SIGNAL [%s] %s Entry=%.5f SL=%.5f TP=%.5f RR=%.1f",
+                sym, sig.direction.upper(),
+                sig.entry_price, sig.stop_loss, sig.take_profit, sig.rr_ratio,
             )
-            return self._pending_signal
+            return sig
 
         return None
 
@@ -722,30 +838,31 @@ class DashboardRouter:
     # Internal
     # ------------------------------------------------------------------
 
-    def _refresh_signal(self, today: date) -> None:
-        """Fetch data, compute ICT trades, cache the best one."""
-        self._signal_date    = today
-        self._pending_signal = None
-        self._signal_emitted = False
+    def _refresh_signal(self, symbol: str, today: date) -> None:
+        """Fetch data, compute ICT trades, cache the best one for this symbol."""
+        cache = self._cache[symbol]
+        cache["date"]    = today
+        cache["signal"]  = None
+        cache["emitted"] = False
 
-        _log.info("DashboardRouter: refreshing daily signal for %s", today)
+        _log.info("DashboardRouter: [%s] refreshing daily signal for %s", symbol, today)
 
         try:
-            monthly_df, weekly_df, daily_df = _fetch_xauusd_data()
-            cross_df = _fetch_cross_data()
+            monthly_df, weekly_df, daily_df = _fetch_instrument_data(symbol)
+            cross_df = _fetch_cross_data_for(symbol)
         except Exception as e:
-            _log.error("DashboardRouter: data fetch failed — %s", e)
+            _log.error("DashboardRouter: [%s] data fetch failed — %s", symbol, e)
             return
 
         try:
-            bias_score = _compute_bias_score(weekly_df, cross_df)
+            bias_score = _compute_bias_score(symbol, weekly_df, cross_df)
             trades     = _generate_ict_trades(monthly_df, weekly_df, daily_df, bias_score)
         except Exception as e:
-            _log.error("DashboardRouter: analysis failed — %s", e)
+            _log.error("DashboardRouter: [%s] analysis failed — %s", symbol, e)
             return
 
-        _log.info("DashboardRouter: bias_score=%.2f | trades=%s",
-                  bias_score,
+        _log.info("DashboardRouter: [%s] bias_score=%.2f | trades=%s",
+                  symbol, bias_score,
                   [(t["direction"], t["confidence"], t.get("rr1")) for t in trades])
 
         # Pick best actionable trade (prefer HIGH, then MEDIUM; skip WAIT/LOW)
@@ -757,30 +874,30 @@ class DashboardRouter:
                 continue
             rr = trade.get("rr1") or 0.0
             if rr < _MIN_RR:
-                _log.debug("DashboardRouter: skipping trade %d — RR %.2f < %.2f min",
-                           trade["id"], rr, _MIN_RR)
+                _log.debug("DashboardRouter: [%s] skipping trade %d — RR %.2f < %.2f min",
+                           symbol, trade["id"], rr, _MIN_RR)
                 continue
             if best is None or trade["confidence"] == "HIGH":
                 best = trade
-            break   # first HIGH wins; first MEDIUM if no HIGH
+            break
 
         if best is None:
-            _log.info("DashboardRouter: no actionable trade today (all WAIT/LOW/low-RR)")
+            _log.info("DashboardRouter: [%s] no actionable trade today (all WAIT/LOW/low-RR)", symbol)
             return
 
-        self._pending_signal = self._to_trade_signal(best, bias_score)
+        cache["signal"] = self._to_trade_signal(symbol, best, bias_score)
 
     @staticmethod
-    def _to_trade_signal(trade: dict, bias_score: float) -> TradeSignal:
+    def _to_trade_signal(symbol: str, trade: dict, bias_score: float) -> TradeSignal:
         direction  = "bullish" if trade["direction"] == "LONG" else "bearish"
         entry      = trade["entry"]
         stop       = trade["stop"]
         tp         = trade["target1"]
         rr         = trade.get("rr1") or 0.0
-        confluence = min(0.50 + abs(bias_score) * 0.40, 0.90)   # 0.50–0.90 based on bias strength
+        confluence = min(0.50 + abs(bias_score) * 0.40, 0.90)
 
         return TradeSignal(
-            symbol="XAUUSD",
+            symbol=symbol,
             direction=direction,
             entry_price=float(entry),
             stop_loss=float(stop),
